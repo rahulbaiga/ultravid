@@ -12,17 +12,23 @@ header{position:sticky;top:0;z-index:40;background:rgba(11,11,16,.96);border-bot
 .row{display:flex;align-items:center;gap:8px}
 .logo{font-weight:900;font-size:20px;cursor:pointer;display:flex;align-items:center;gap:8px;white-space:nowrap}
 .bolt{width:32px;height:32px;display:grid;place-items:center;border-radius:10px;background:#e11d48}
-.searchbar{flex:1;display:flex;align-items:center;background:#15151d;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:0 14px;margin-left:8px}
+.search-container{position:relative;flex:1;display:flex;align-items:center;margin-left:8px;min-width:0}
+.searchbar{flex:1;display:flex;align-items:center;background:#15151d;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:0 14px;min-width:0}
 .searchbar input{flex:1;background:transparent;border:0;outline:0;color:#fff;padding:10px 8px;font-size:14px;min-width:0}
-.btn{background:#e11d48;border:0;color:#fff;border-radius:999px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap}
+.btn{background:#e11d48;border:0;color:#fff;border-radius:999px;padding:10px 14px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;display:grid;place-items:center;min-width:44px;min-height:40px}
+.btn:hover{background:#be123c}
+.btn svg{width:18px;height:18px;display:block}
 .chips{display:flex;gap:6px;font-size:12px;color:rgba(255,255,255,.6);padding:8px 0;flex-wrap:wrap}
-.chip{background:#23232e;border-radius:999px;padding:2px 10px}
-#mediaGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(min-width:768px){#mediaGrid{grid-template-columns:1fr 1fr 1fr}}
-@media(min-width:1024px){#mediaGrid{grid-template-columns:1fr 1fr 1fr 1fr}}
-#grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(min-width:768px){#grid{grid-template-columns:1fr 1fr 1fr}#watchGrid{grid-template-columns:2fr 1fr!important}}
-@media(min-width:1024px){#grid{grid-template-columns:1fr 1fr 1fr 1fr}}
+.chip{background:#23232e;border-radius:999px;padding:4px 12px;cursor:pointer;border:1px solid transparent;user-select:none}
+.chip:hover{background:#2e2e3d;color:#fff}
+.chip.active{background:#e11d48;color:#fff;border-color:#e11d48;font-weight:700}
+#suggestions-box{position:absolute;top:calc(100% + 6px);left:0;right:48px;background:#1c1c26;border:1px solid rgba(255,255,255,.12);border-radius:12px;overflow:hidden;z-index:100;display:none;box-shadow:0 12px 32px rgba(0,0,0,.6);max-height:320px;overflow-y:auto}
+#suggestions-box.open{display:block}
+.sugg-item{display:flex;align-items:center;gap:10px;padding:10px 14px;font-size:14px;color:#eee;cursor:pointer}
+.sugg-item:hover{background:#2a2a38}
+.sugg-item svg{width:15px;height:15px;flex-shrink:0;opacity:.6}
+.sugg-item b{color:#fff}
+#mediaGrid,#grid,#video-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
 .card{background:#15151d;border:1px solid #23232e;border-radius:14px;overflow:hidden;cursor:pointer}
 .card img{aspect-ratio:16/9;object-fit:cover;width:100%;display:block;background:#000}
 .card .p{padding:8px}
@@ -36,24 +42,29 @@ video{width:100%;border-radius:16px;background:#000;max-height:52vh}
 select{background:#23232e;color:#fff;border:0;border-radius:8px;padding:6px}
 #dlOverlay{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.7)}
 #dlSheet{background:#15151d;border:1px solid rgba(255,255,255,.1);border-radius:16px 16px 0 0;padding:16px;position:absolute;bottom:0;left:0;right:0;transition:transform .25s ease}
-@media(min-width:768px){#dlSheet{position:relative;max-width:440px;margin:96px auto;border-radius:16px}}
+@media(min-width:768px){#dlSheet{position:relative;max-width:440px;margin:96px auto;border-radius:16px}#watchGrid{grid-template-columns:2fr 1fr!important}}
 .sheet-hidden{transform:translateY(100%)}
 .skel{border-radius:14px;background:linear-gradient(90deg,#15151d 25%,#23232e 50%,#15151d 75%);background-size:200% 100%;animation:sh 1.1s infinite}
 @keyframes sh{to{background-position:-200% 0}}
 .rel{display:flex;gap:8px;background:#15151d;border:1px solid #23232e;border-radius:12px;padding:6px;cursor:pointer}
 .rel img{width:140px;border-radius:8px;aspect-ratio:16/9;object-fit:cover}
 .mut{color:rgba(255,255,255,.5);font-size:12px}
+#sentinel,#scrollSentinel{padding:20px;text-align:center;color:#888;font-size:13px;min-height:60px;display:flex;align-items:center;justify-content:center;gap:10px}
+.spinner{width:22px;height:22px;border-radius:50%;border:3px solid rgba(255,255,255,.15);border-top-color:#e11d48;animation:spin 0.8s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
 <header><div class="wrap">
 <div class="row"><div class="logo" id="logoBtn"><span class="bolt">⚡</span>UltraVid</div>
-<div class="searchbar"><span class="mut">⌕</span><input id="searchInput" placeholder="Search videos OR paste link…"/><button id="clearBtn" class="hidden" style="background:none;border:0;color:#888">✕</button></div>
-<button id="searchBtn" class="btn">Go</button></div>
-<div class="chips"><span class="chip">▶ YouTube</span><span class="chip">◎ Reels</span><span class="chip">f FB</span><span class="chip">X</span><span class="chip">♪ MP3</span><span class="chip">◉ 4K</span></div>
+<div class="search-container"><div class="searchbar"><span class="mut">⌕</span><input id="searchInput" placeholder="Search videos OR paste link…" autocomplete="off"/><button id="clearBtn" class="hidden" style="background:none;border:0;color:#888;cursor:pointer">✕</button></div>
+<button id="searchBtn" class="btn" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg></button>
+<div id="suggestions-box"></div></div>
+</div>
+<div class="chips"><span class="chip active" data-filter="youtube" data-query="trending videos">▶ YouTube</span><span class="chip" data-filter="reels" data-query="trending reels">◎ Reels</span><span class="chip" data-filter="facebook" data-query="trending facebook videos">f FB</span><span class="chip" data-filter="x" data-query="trending x videos">X</span><span class="chip" data-filter="mp3" data-query="latest music mp3">♪ MP3</span><span class="chip" data-filter="4k" data-query="4k uhd videos">◉ 4K</span></div>
 </div></header>
 <main class="wrap">
-<div id="homeView"><div id="status" class="mut" style="margin-bottom:12px">Trending now</div><div id="grid"></div><div id="mediaGrid"></div><div id="scrollSentinel" class="py-4 text-center text-gray-500" style="padding:16px;text-align:center;color:#888;font-size:13px"></div></div>
+<div id="homeView"><div id="status" class="mut" style="margin-bottom:12px">Trending now</div><div id="grid" class="hidden"></div><div id="video-grid"><div id="mediaGrid"></div><div id="sentinel"><span class="spinner"></span><span>Loading more…</span></div><div id="scrollSentinel" style="padding:16px;text-align:center;color:#888;font-size:13px"></div></div></div>
 <div id="watchView" class="hidden">
 <button id="backBtn" style="background:none;border:0;color:#999;font-size:14px;margin-bottom:8px;cursor:pointer">← Back</button>
 <div id="watchGrid" style="display:grid;gap:16px">
