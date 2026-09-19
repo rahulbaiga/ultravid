@@ -1,0 +1,11 @@
+venv/
+.venv/
+app/downloads/
+*.log
+server.log
+task_output.json
+__pycache__/
+*.pyc
+.cache/
+.env
+downloads/

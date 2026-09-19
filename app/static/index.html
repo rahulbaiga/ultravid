@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>UltraVid</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b0b10;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+header{position:sticky;top:0;z-index:40;background:rgba(11,11,16,.96);border-bottom:1px solid rgba(255,255,255,.1)}
+.wrap{max-width:1100px;margin:0 auto;padding:12px}
+.row{display:flex;align-items:center;gap:8px}
+.logo{font-weight:900;font-size:20px;cursor:pointer;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.bolt{width:32px;height:32px;display:grid;place-items:center;border-radius:10px;background:#e11d48}
+.searchbar{flex:1;display:flex;align-items:center;background:#15151d;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:0 14px;margin-left:8px}
+.searchbar input{flex:1;background:transparent;border:0;outline:0;color:#fff;padding:10px 8px;font-size:14px;min-width:0}
+.btn{background:#e11d48;border:0;color:#fff;border-radius:999px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap}
+.chips{display:flex;gap:6px;font-size:12px;color:rgba(255,255,255,.6);padding:8px 0;flex-wrap:wrap}
+.chip{background:#23232e;border-radius:999px;padding:2px 10px}
+#mediaGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(min-width:768px){#mediaGrid{grid-template-columns:1fr 1fr 1fr}}
+@media(min-width:1024px){#mediaGrid{grid-template-columns:1fr 1fr 1fr 1fr}}
+#grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(min-width:768px){#grid{grid-template-columns:1fr 1fr 1fr}#watchGrid{grid-template-columns:2fr 1fr!important}}
+@media(min-width:1024px){#grid{grid-template-columns:1fr 1fr 1fr 1fr}}
+.card{background:#15151d;border:1px solid #23232e;border-radius:14px;overflow:hidden;cursor:pointer}
+.card img{aspect-ratio:16/9;object-fit:cover;width:100%;display:block;background:#000}
+.card .p{padding:8px}
+.tt{font-size:13px;font-weight:600;line-height:1.3;min-height:2.4em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ch{font-size:11px;color:rgba(255,255,255,.5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px}
+.playbtn{margin-top:8px;width:100%;border-radius:8px;background:#e11d48;color:#fff;border:0;padding:7px;font-size:12px;font-weight:700;cursor:pointer}
+.hidden{display:none!important}
+video{width:100%;border-radius:16px;background:#000;max-height:52vh}
+.action-btn{display:inline-flex;align-items:center;gap:6px;background:#1c1c26;border:1px solid #2a2a38;color:#fff;border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.action-btn.active,.action-btn.primary{background:#e11d48;border-color:#e11d48}
+select{background:#23232e;color:#fff;border:0;border-radius:8px;padding:6px}
+#dlOverlay{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.7)}
+#dlSheet{background:#15151d;border:1px solid rgba(255,255,255,.1);border-radius:16px 16px 0 0;padding:16px;position:absolute;bottom:0;left:0;right:0;transition:transform .25s ease}
+@media(min-width:768px){#dlSheet{position:relative;max-width:440px;margin:96px auto;border-radius:16px}}
+.sheet-hidden{transform:translateY(100%)}
+.skel{border-radius:14px;background:linear-gradient(90deg,#15151d 25%,#23232e 50%,#15151d 75%);background-size:200% 100%;animation:sh 1.1s infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.rel{display:flex;gap:8px;background:#15151d;border:1px solid #23232e;border-radius:12px;padding:6px;cursor:pointer}
+.rel img{width:140px;border-radius:8px;aspect-ratio:16/9;object-fit:cover}
+.mut{color:rgba(255,255,255,.5);font-size:12px}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+<div class="row"><div class="logo" id="logoBtn"><span class="bolt">⚡</span>UltraVid</div>
+<div class="searchbar"><span class="mut">⌕</span><input id="searchInput" placeholder="Search videos OR paste link…"/><button id="clearBtn" class="hidden" style="background:none;border:0;color:#888">✕</button></div>
+<button id="searchBtn" class="btn">Go</button></div>
+<div class="chips"><span class="chip">▶ YouTube</span><span class="chip">◎ Reels</span><span class="chip">f FB</span><span class="chip">X</span><span class="chip">♪ MP3</span><span class="chip">◉ 4K</span></div>
+</div></header>
+<main class="wrap">
+<div id="homeView"><div id="status" class="mut" style="margin-bottom:12px">Trending now</div><div id="grid"></div><div id="mediaGrid"></div><div id="scrollSentinel" class="py-4 text-center text-gray-500" style="padding:16px;text-align:center;color:#888;font-size:13px"></div></div>
+<div id="watchView" class="hidden">
+<button id="backBtn" style="background:none;border:0;color:#999;font-size:14px;margin-bottom:8px;cursor:pointer">← Back</button>
+<div id="watchGrid" style="display:grid;gap:16px">
+<div><video id="videoEl" controls playsinline preload="metadata"></video>
+<h1 id="wTitle" style="font-size:17px;margin-top:12px">Title</h1>
+<div class="row" style="margin-top:8px"><div id="wAvatar" style="width:40px;height:40px;border-radius:50%;background:#e11d48;display:grid;place-items:center;font-weight:900">U</div>
+<div style="flex:1;min-width:0"><div id="wChannel" style="font-size:14px;font-weight:600">Channel</div><div id="wMeta" class="mut">views • duration</div></div></div>
+<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+<button id="likeBtn" class="action-btn">👍 <span id="likeCount">0</span></button>
+<button id="dislikeBtn" class="action-btn">👎</button>
+<button id="dlOpenBtn" class="action-btn primary">⬇ Download</button>
+<span class="action-btn">⚙ <select id="qualitySel"></select></span>
+<button id="shareBtn" class="action-btn">↗ Share</button></div>
+<div id="shareMsg" class="hidden" style="color:#6ee7b7;font-size:12px;margin-top:8px">Link copied!</div></div>
+<div><div style="font-weight:700;font-size:14px;margin-bottom:8px">Up next</div><div id="related" style="display:grid;gap:8px"></div></div>
+</div></div>
+</main>
+<div id="dlOverlay" class="hidden"><div id="dlSheet" class="sheet-hidden">
+<div class="row" style="justify-content:space-between;margin-bottom:8px"><b>⬇ Save offline</b><button id="dlClose" style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.1);color:#fff;border:0">✕</button></div>
+<div class="mut" style="margin-bottom:12px">MP4 merges best audio • Audio-only saves MP3</div>
+<div id="dlList" style="display:grid;gap:8px;max-height:40vh;overflow:auto"></div>
+<button id="mp3Btn" style="margin-top:8px;width:100%;border-radius:10px;padding:10px;background:#059669;color:#fff;border:0;font-weight:700">♪ Download MP3</button>
+<div id="dlStatus" class="mut" style="margin-top:8px"></div>
+</div></div>
+<script src="/app.js"></script>
+</body>
+</html>

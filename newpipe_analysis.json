@@ -1,0 +1,55 @@
+{
+  "reference_repo": "/root/reference_newpipe",
+  "commit_depth": 1,
+  "search_extractor": "extractor/src/main/java/org/schabi/newpipe/extractor/services/youtube/extractors/YoutubeSearchExtractor.java",
+  "innertube": {
+    "search_endpoint": "https://www.youtube.com/youtubei/v1/search?prettyPrint=false",
+    "player_endpoint_web": "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+    "player_endpoint_gapis": "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false&t=<t-param>&id=<videoId>",
+    "fallback_base": "https://youtubei.googleapis.com/youtubei/v1/",
+    "method": "POST JSON",
+    "headers": "YouTube WEB headers (User-Agent desktop Chrome, Content-Type application/json, X-Goog-Api-Format-Version 2 for VISIONOS)",
+    "search_payload": {
+      "context": {
+        "client": {
+          "hl": "en",
+          "gl": "US",
+          "clientName": "WEB",
+          "clientVersion": "2.20260805.01.00",
+          "originalUrl": "https://www.youtube.com",
+          "platform": "DESKTOP",
+          "utcOffsetMinutes": 0
+        },
+        "request": {"internalExperimentFlags": [], "useSsl": true},
+        "user": {"lockedSafetyMode": false}
+      },
+      "query": "<search term>",
+      "params": "<optional search filter>"
+    },
+    "player_payload_extra": {
+      "videoId": "<id>",
+      "contentCheckOk": true,
+      "racyCheckOk": true,
+      "cpn": "<16-char nonce>"
+    }
+  },
+  "clients": {
+    "search": "WEB (clientId 1, WEB_HARDCODED_CLIENT_VERSION 2.20260805.01.00, DESKTOP, WATCH screen)",
+    "streams_metadata": "WEB + visitorData prefetch",
+    "streams_media": "VISIONOS (clientId 101, version 1.04, Apple RealityDevice17,1, visionOS 26.6, MOBILE) to bypass throttling/PO-token",
+    "other": "WEB_REMIX 67 for music, WEB_MUSIC_ANALYTICS 31 for charts"
+  },
+  "comparison_with_ultravid": {
+    "ultravid_now": "app/extractor.py uses yt_dlp.YoutubeDL.extract_info with ytsearch12 + full extract (2 calls incl. android fallback), spawns JS interpreter, signature decipher, 53-format parse, 3-15s latency",
+    "newpipe": "single httpx POST ~60-120KB JSON, direct sectionListRenderer parse, no JS eval, 200-400ms, extract_flat equivalent",
+    "speed_gap": "process spawn + JS + multiple player API roundtrips + full format sort vs one stateless HTTP call"
+  },
+  "blueprint_httpx_subsecond": {
+    "lib": "httpx.AsyncClient(http2=True, timeout=8)",
+    "step1_search": "POST https://www.youtube.com/youtubei/v1/search?prettyPrint=false with WEB context + query, parse contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents[].itemSectionRenderer.contents[] -> videoRenderer(videoId,title,navigationEndpoint,lengthText,thumbnail,ownerText,viewCountText)",
+    "step2_player": "POST https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false&t=<rand>&id=<id> with VISIONOS context + videoId/contentCheckOk/racyCheckOk/cpn, read streamingData.adaptiveFormats (itag,url,mimeType,bitrate,width,height,audioTrack) + videoDetails(title,author,viewCount,lengthSeconds)",
+    "step3_cache": "in-memory TTL 10min for search, 6h for player URLs (googlevideo expiry), ETag support",
+    "step4_fallback": "keep yt-dlp path only when InnerTube returns LOGIN_REQUIRED / 403 / empty streamingData",
+    "expected_latency": "search 200-300ms, player 300-600ms on Termux LTE"
+  }
+}
