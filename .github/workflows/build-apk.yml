@@ -7,30 +7,32 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - uses: android-actions/setup-android@v3
+          java-version: '17'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
       - name: Sync web assets
         run: |
           mkdir -p android/app/src/main/assets
           cp app/static/index.html android/app/src/main/assets/index.html
           cp app/static/app.js android/app/src/main/assets/app.js
+      - name: Ensure gradle wrapper
+        working-directory: ./android
+        run: |
+          if [ ! -f gradlew ]; then gradle wrapper; fi
+          chmod +x gradlew
       - name: Build debug APK
-        working-directory: android
-        run: chmod +x gradlew 2>/dev/null || true; ./gradlew assembleDebug || gradle assembleDebug
-      - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk UltraVid-debug.apk || true
-      - uses: actions/upload-artifact@v4
+        working-directory: ./android
+        run: ./gradlew assembleDebug --stacktrace
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: UltraVid-debug.apk
-          path: UltraVid-debug.apk
-      - name: Draft release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          draft: true
-          tag_name: build-${{ github.run_number }}
-          files: UltraVid-debug.apk
+          name: UltraVid-APK
+          path: android/app/build/outputs/apk/debug/*.apk
