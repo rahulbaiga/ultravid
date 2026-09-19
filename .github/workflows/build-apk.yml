@@ -16,23 +16,19 @@ jobs:
           java-version: '17'
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
       - name: Sync web assets
         run: |
           mkdir -p android/app/src/main/assets
           cp app/static/index.html android/app/src/main/assets/index.html
           cp app/static/app.js android/app/src/main/assets/app.js
-      - name: Ensure gradle wrapper
-        working-directory: ./android
-        run: |
-          if [ ! -f gradlew ]; then gradle wrapper; fi
-          chmod +x gradlew
-      - name: Build debug APK
-        working-directory: ./android
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build APK
+        run: cd android && gradle wrapper --gradle-version 8.5 && chmod +x gradlew && ./gradlew assembleDebug --no-daemon --stacktrace
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UltraVid-APK
+          name: UltraVid-v1.0-debug
           path: android/app/build/outputs/apk/debug/*.apk
