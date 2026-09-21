@@ -109,8 +109,9 @@ window.UltraVid = window.UltraVid || {};
     }
   }
 
-  async function fetchFeed(params = {}) {
-    const { page = 1, limit = 12, seed = 0, category = 'all', signal } = params;
+  async function fetchFeed(params = {}, opts = {}) {
+    const signal = params.signal || (opts && opts.signal);
+    const { page = 1, limit = 12, seed = 0, category = 'all' } = params;
     const qs = new URLSearchParams({
       page: String(page),
       limit: String(limit),

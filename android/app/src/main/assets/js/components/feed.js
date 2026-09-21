@@ -8,23 +8,41 @@ window.UltraVid = window.UltraVid || {};
 (function() {
   const { refreshIcons } = window.UltraVid.utils;
 
-  // Persistent state registry for all categories and tabs
-  const feedStates = {
-    // Home categories (Tier 2)
-    all:     { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-all', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    gaming:  { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-gaming', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    tech:    { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-tech', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    movies:  { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-movies', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    music:   { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-music', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    science: { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-science', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    sports:  { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-sports', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    comedy:  { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-comedy', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    food:    { page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-food', emptyCount: 0, seed: Math.floor(Math.random() * 1000) },
-    // Dedicated Bottom Tabs (Tier 1)
-    trending:{ page: 1, queue: [], seenIds: new Set(), hasMore: true, isFetching: false, scrollY: 0, initialized: false, elId: 'grid-trending', emptyCount: 0, seed: Math.floor(Math.random() * 1000) }
-  };
+  const ALL_CATEGORIES = [
+    'all', 'gaming', 'tech', 'movies', 'music', 
+    'science', 'sports', 'comedy', 'food', 'trending'
+  ];
 
-  let currentCategory = 'all';
+  function getActiveCategory() {
+    return window.currentActiveCategory || 'all';
+  }
+
+  // Persistent state registry for all categories and tabs (Sandboxed Multi-Tenant State Machine)
+  const feedStates = {};
+
+  // Initialize isolated sandbox for each category
+  ALL_CATEGORIES.concat(['search']).forEach(cat => {
+    if (!feedStates[cat]) {
+      feedStates[cat] = {
+        page: 1,
+        queue: [],
+        seenIds: new Set(),
+        hasMore: true,
+        isFetching: false,
+        fetchStartTime: 0,
+        abortController: null,
+        scrollY: 0,
+        initialized: false,
+        epoch: 0,
+        elId: cat === 'trending' ? 'grid-trending' : `grid-${cat}`,
+        emptyCount: 0,
+        seed: Math.floor(Math.random() * 1000)
+      };
+    }
+  });
+
+  window.currentActiveCategory = window.currentActiveCategory || 'all';
+  let currentCategory = getActiveCategory();
   let currentTab = 'home';
   let feedMode = true;
   let tabScrollY = { home: 0, trending: 0, library: 0 };
@@ -35,6 +53,7 @@ window.UltraVid = window.UltraVid || {};
   let feedObserver = null;
   let scrollThrottle = false;
   const safetyTimers = {};
+  const activeAbortControllers = {};
 
   let itemCallbacks = {
     onPlay: null,
@@ -53,7 +72,7 @@ window.UltraVid = window.UltraVid || {};
 
   function getActiveFeedKey() {
     if (currentTab === 'trending') return 'trending';
-    if (currentTab === 'home') return currentCategory;
+    if (currentTab === 'home') return getActiveCategory();
     return null;
   }
 
@@ -94,11 +113,21 @@ window.UltraVid = window.UltraVid || {};
 
   async function retryCategory(key) {
     const state = feedStates[key];
+    if (state && state.abortController) {
+      try { state.abortController.abort(); } catch (e) {}
+      state.abortController = null;
+    }
+    if (activeAbortControllers[key]) {
+      try { activeAbortControllers[key].abort(); } catch (e) {}
+      delete activeAbortControllers[key];
+    }
     if (!state) return;
     state.initialized = false;
     state.isFetching = false;
+    state.fetchStartTime = 0;
     state.page = 1;
     state.hasMore = true;
+    state.emptyCount = 0;
     await ensureCategoryLoaded(key);
   }
 
@@ -219,22 +248,54 @@ window.UltraVid = window.UltraVid || {};
 
   async function fetchBatch(key = getActiveFeedKey(), pageToFetch = null) {
     const state = feedStates[key];
-    if (!state || state.isFetching || !state.hasMore) return;
+    if (!state || !state.hasMore) return;
+
+    // Deadlock Breaker: If already fetching, check if it's a dead latch (> 6 seconds)
+    if (state.isFetching) {
+      if (Date.now() - (state.fetchStartTime || 0) > 6000) {
+        console.warn(`[FeedEngine] Breaking dead isFetching lock for [${key}]`);
+        state.isFetching = false;
+      } else {
+        return;
+      }
+    }
 
     const targetPage = pageToFetch != null ? pageToFetch : state.page;
+
+    // Cancel previous in-flight controller if active
+    if (state.abortController) {
+      try { state.abortController.abort(); } catch (e) {}
+      state.abortController = null;
+    }
+    if (activeAbortControllers[key]) {
+      try { activeAbortControllers[key].abort(); } catch (e) {}
+      delete activeAbortControllers[key];
+    }
+    const abortController = new AbortController();
+    state.abortController = abortController;
+    activeAbortControllers[key] = abortController;
+
     state.isFetching = true;
+    state.fetchStartTime = Date.now();
+    const thisEpoch = ++state.epoch;
+
+    const timeoutDuration = (targetPage === 1) ? 18000 : 25000;
 
     clearTimeout(safetyTimers[key]);
-    safetyTimers[key] = setTimeout(() => { state.isFetching = false; }, 8000);
+    safetyTimers[key] = setTimeout(() => {
+      if (thisEpoch === state.epoch && state.isFetching) {
+        state.isFetching = false;
+      }
+    }, timeoutDuration + 2000);
 
-    // Watchdog timer for initial batch
+    // Watchdog timer for initial batch (18000ms adaptive expansion)
     const watchdog = setTimeout(() => {
-      if (state.isFetching && state.queue.length === 0 && targetPage === 1) {
-        console.warn(`[FeedEngine] Initial fetch timed out for ${key}. Releasing lock.`);
+      if (thisEpoch === state.epoch && state.isFetching && state.queue.length === 0 && targetPage === 1) {
+        console.warn(`[FeedEngine] Cold fetch timed out after ${timeoutDuration}ms for ${key}`);
         state.isFetching = false;
         showFeedError(key);
       }
-    }, 8000);
+    }, timeoutDuration);
 
     const sentinel = getActiveSentinel();
     if (sentinel && state.queue.length === 0 && isKeyActive(key)) {
@@ -244,62 +305,120 @@ window.UltraVid = window.UltraVid || {};
     const categoryParam = key === 'trending' ? 'trending' : key;
 
     try {
-      const j = await window.UltraVid.api.fetchFeed({
-        page: targetPage,
-        limit: 12,
-        seed: state.seed,
-        category: categoryParam
-      });
+      const j = (window.ApiService && typeof window.ApiService.getFeed === 'function')
+        ? await window.ApiService.getFeed(key, targetPage, 12, { signal: abortController.signal })
+        : await window.UltraVid.api.fetchFeed({
+            page: targetPage,
+            limit: 12,
+            seed: state.seed,
+            category: categoryParam,
+            signal: abortController.signal
+          }, { signal: abortController.signal });
+
       clearTimeout(watchdog);
-      const rawItems = (j && j.results) || [];
 
-      let items = rawItems.filter(it => it.id && !state.seenIds.has(it.id));
-      if (items.length === 0 && rawItems.length > 0) {
-        state.seenIds.clear();
-        items = rawItems;
+      if (thisEpoch !== state.epoch) {
+        // Discard stale responses cleanly without state corruption
+        return;
       }
-      items.forEach(it => { if (it.id) state.seenIds.add(it.id); });
 
-      if (items.length > 0) {
-        prefetchThumbnails(items);
-        state.emptyCount = 0;
-        state.queue.push(...items);
-        state.page = targetPage + 1;
+      const rawItems = (j && Array.isArray(j.results)) ? j.results : [];
 
-        // Auto-drain: if user is near bottom, flush queue immediately
-        const isNearBottom = (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 700);
-        if (state.queue.length > 0 && isNearBottom && isKeyActive(key)) {
-          renderNext(key, 4);
-        }
-      } else {
+      if (rawItems.length === 0) {
         state.emptyCount = (state.emptyCount || 0) + 1;
         state.page = targetPage + 1;
-        if (state.emptyCount >= 5) {
+        if (state.emptyCount >= 4) {
           state.hasMore = false;
           if (sentinel && isKeyActive(key)) sentinel.textContent = 'No more videos';
         } else {
-          state.isFetching = false;
-          return await fetchBatch(key, targetPage + 1);
+          setTimeout(() => {
+            if (state.hasMore && !state.isFetching && isKeyActive(key)) {
+              fetchBatch(key, targetPage + 1);
+            }
+          }, 300);
+        }
+        return;
+      }
+
+      // Filter unseen items
+      let freshItems = rawItems.filter(it => it.id && !state.seenIds.has(it.id));
+
+      // Duplicate punch-through handling:
+      // If all items were duplicates of seen items, we don't treat this as empty/terminal.
+      // If we've seen a lot of videos (> 60), clear seenIds and loop back seamlessly.
+      // Otherwise, advance page to punch through the duplicate cluster.
+      if (freshItems.length === 0) {
+        console.log(`[FeedEngine] Duplicate batch on page ${targetPage} for [${key}]. Auto-advancing.`);
+        state.page = targetPage + 1;
+        if (state.seenIds.size > 60) {
+          state.seenIds.clear();
+          freshItems = rawItems;
+        } else {
+          // Autonomous punch-through retry on next page without penalizing hasMore
+          setTimeout(() => {
+            if (state.hasMore && !state.isFetching && isKeyActive(key)) {
+              fetchBatch(key, targetPage + 1);
+            }
+          }, 200);
+          return;
+        }
+      }
+
+      freshItems.forEach(it => {
+        if (it.id) {
+          state.seenIds.add(it.id);
+          state.queue.push(it);
+        }
+      });
+
+      if (freshItems.length > 0 || state.queue.length > 0) {
+        // Prefetch thumbnail images for this specific category batch
+        prefetchThumbnails(freshItems);
+        state.emptyCount = 0;
+        state.page = Math.max(state.page, targetPage + 1);
+
+        // Zero-Batch Wait: Immediately flush to DOM if container needs cards
+        const container = document.getElementById(state.elId);
+        const activeCount = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+        if (activeCount < 4 || state.queue.length > 0) {
+          renderNext(key, 0);
         }
       }
     } catch (e) {
       clearTimeout(watchdog);
+      if (e && (e.name === 'AbortError' || (e.message && e.message.includes('aborted')))) {
+        console.log(`[FeedEngine] Clean fetch abort for [${key}]`);
+        return;
+      }
+      console.error(`[FeedEngine] Fetch error for [${key}]:`, e);
       state.emptyCount = (state.emptyCount || 0) + 1;
       state.page = targetPage + 1;
       if (targetPage === 1 && state.queue.length === 0) {
-        state.isFetching = false;
-        showFeedError(key);
+        const container = document.getElementById(state.elId);
+        const realCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+        if (realCards === 0) {
+          showFeedError(key);
+        }
         return;
       }
-      if (state.emptyCount >= 5) {
+      if (state.emptyCount >= 4) {
         state.hasMore = false;
         if (sentinel && isKeyActive(key)) sentinel.textContent = 'No more videos';
       } else {
-        state.isFetching = false;
-        return await fetchBatch(key, targetPage + 1);
+        setTimeout(() => {
+          if (state.hasMore && !state.isFetching && isKeyActive(key)) {
+            fetchBatch(key, targetPage + 1);
+          }
+        }, 500);
       }
     } finally {
-      state.isFetching = false;
+      if (thisEpoch === state.epoch) {
+        state.isFetching = false;
+        state.abortController = null;
+        if (activeAbortControllers[key] === abortController) {
+          delete activeAbortControllers[key];
+        }
+      }
       clearTimeout(watchdog);
       clearTimeout(safetyTimers[key]);
       if (state.queue.length > 0 && sentinel && state.hasMore && isKeyActive(key)) {
@@ -308,37 +427,62 @@ window.UltraVid = window.UltraVid || {};
     }
   }
 
-  function renderNext(key = getActiveFeedKey(), count = 2) {
-    if (!feedMode) return;
+  function renderNext(key = getActiveCategory(), maxCount = 0) {
+    if (!feedMode || !key) return 0;
     const state = feedStates[key];
-    if (!state || state.queue.length === 0) return;
+    if (!state || !state.queue || state.queue.length === 0) return 0;
 
-    const targetEl = document.getElementById(state.elId);
-    if (!targetEl) return;
+    const container = document.getElementById(state.elId);
+    if (!container) return 0;
 
-    const toRender = state.queue.splice(0, count);
-    if (toRender.length === 0) return;
+    // If maxCount is 0 or unassigned, flush all available items in state.queue immediately
+    const countToRender = maxCount > 0 ? Math.min(maxCount, state.queue.length) : state.queue.length;
+    const batch = state.queue.splice(0, countToRender);
+    if (batch.length === 0) return 0;
+
+    // Remove initial static skeleton placeholders if present on first real render
+    const skeletons = container.querySelectorAll('.skeleton-card');
+    if (skeletons.length > 0) {
+      skeletons.forEach(s => s.remove());
+    }
 
     const fragment = document.createDocumentFragment();
-    toRender.forEach(it => {
-      fragment.appendChild(window.UltraVid.card.createCard(it, itemCallbacks));
+    batch.forEach(item => {
+      // Deduplicate against already rendered IDs in container
+      if (item && item.id) {
+        const escapedId = window.CSS && window.CSS.escape ? window.CSS.escape(item.id) : item.id;
+        if (container.querySelector(`[data-vid="${escapedId}"]`)) return;
+      }
+      const card = (window.CardComponent && typeof window.CardComponent.createCard === 'function')
+        ? window.CardComponent.createCard(item, itemCallbacks)
+        : (window.UltraVid && window.UltraVid.card ? window.UltraVid.card.createCard(item, itemCallbacks) : null);
+      if (!card) return;
+      if (item && item.id) {
+        card.setAttribute('data-vid', item.id);
+      }
+      card.setAttribute('data-subtopic', (item && item.sub_topic) || '');
+      fragment.appendChild(card);
     });
-    targetEl.appendChild(fragment);
+
+    container.appendChild(fragment);
     refreshIcons();
+    state.initialized = true;
 
     if (isKeyActive(key)) {
       updateCardObserver(key);
     }
 
-    // Proactive Buffer Check: trigger next batch if queue drops to <= 4
+    // Trigger proactive background refill if queue is running low
     if (state.queue.length <= 4 && !state.isFetching && state.hasMore) {
       fetchBatch(key, state.page);
     }
 
     // Stationary Viewport Check: ensure page has real vertical scroll depth
     if (state.queue.length > 0 && isKeyActive(key) && document.documentElement.scrollHeight <= (window.innerHeight + 300)) {
-      renderNext(key, 2);
+      renderNext(key, 0);
     }
+
+    return batch.length;
   }
 
   async function ensureCategoryLoaded(key) {
@@ -359,19 +503,22 @@ window.UltraVid = window.UltraVid || {};
 
     await fetchBatch(key, 1);
 
+    // Clean up any remaining skeletons
+    const skeletons = targetEl.querySelectorAll('.skeleton-card');
+    skeletons.forEach(s => s.remove());
+
     if (state.queue.length > 0) {
-      // Clear skeletons and inject real cards
-      targetEl.innerHTML = '';
-      renderNext(key, 6);
-      state.initialized = true;
-
-      // Proactively pre-fetch page 2
-      if (state.hasMore && !state.isFetching) {
-        fetchBatch(key, 2);
-      }
-
-      setupSentinelObserver();
+      renderNext(key, 0);
     }
+    state.initialized = true;
+
+    // Proactively pre-fetch page 2
+    if (state.hasMore && !state.isFetching) {
+      fetchBatch(key, 2);
+    }
+
+    setupSentinelObserver();
+    reconcileFeedViewport(key);
   }
 
   async function switchCategory(targetCategory) {
@@ -382,6 +529,7 @@ window.UltraVid = window.UltraVid || {};
       } else {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
+      reconcileFeedViewport(targetCategory);
       return;
     }
 
@@ -421,13 +569,17 @@ window.UltraVid = window.UltraVid || {};
     feedMode = true;
 
     const state = feedStates[targetCategory];
-    if (!state.initialized) {
-      await ensureCategoryLoaded(targetCategory);
-    } else {
-      // Instant 0ms swap: zero network requests, zero skeletons, exact scroll restored
+    if (state && state.initialized) {
+      // Instant 0ms reveal of pre-rendered container with zero skeletons and zero delay
       window.scrollTo(0, state.scrollY || 0);
       updateCardObserver(targetCategory);
       setupSentinelObserver();
+      reconcileFeedViewport(targetCategory);
+      return;
+    }
+
+    if (state && !state.initialized) {
+      await ensureCategoryLoaded(targetCategory);
     }
   }
 
@@ -584,6 +736,86 @@ window.UltraVid = window.UltraVid || {};
     refreshIcons();
   }
 
+  const PRIORITY_PRELOAD_CATEGORIES = ['gaming', 'tech', 'music', 'movies'];
+
+  function speculativePreloadCategories() {
+    // Only execute when browser is idle to ensure zero impact on initial 'all' feed rendering
+    const scheduleTask = window.requestIdleCallback || ((cb) => setTimeout(cb, 1000));
+
+    scheduleTask(() => {
+      let delay = 600; // Stagger requests to prevent thread and network congestion
+
+      PRIORITY_PRELOAD_CATEGORIES.forEach(cat => {
+        setTimeout(async () => {
+          const state = feedStates[cat];
+          // If already fetched or currently active, skip
+          if (!state || state.initialized || state.isFetching || state.queue.length > 0) return;
+
+          console.log(`[SpeculativePreloader] Silently preloading category [${cat}] in background...`);
+          try {
+            state.isFetching = true;
+            const resp = (window.ApiService && typeof window.ApiService.getFeed === 'function')
+              ? await window.ApiService.getFeed(cat, 1, 10)
+              : ((window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.fetchFeed === 'function')
+                  ? await window.UltraVid.api.fetchFeed({ category: cat, page: 1, limit: 10 })
+                  : null);
+            state.isFetching = false;
+
+            if (resp && resp.results && resp.results.length > 0) {
+              const freshItems = resp.results.filter(it => it.id && !state.seenIds.has(it.id));
+              freshItems.forEach(it => {
+                state.seenIds.add(it.id);
+                state.queue.push(it);
+              });
+
+              // Warm image thumbnails into browser cache
+              prefetchThumbnails(freshItems);
+
+              // Pre-mount directly into the hidden DOM container
+              const container = document.getElementById(state.elId);
+              if (container) {
+                const skeletons = container.querySelectorAll('.skeleton-card');
+                skeletons.forEach(s => s.remove());
+
+                const fragment = document.createDocumentFragment();
+                freshItems.forEach(item => {
+                  if (item && item.id) {
+                    const escapedId = window.CSS && window.CSS.escape ? window.CSS.escape(item.id) : item.id;
+                    if (container.querySelector(`[data-vid="${escapedId}"]`)) return;
+                  }
+                  const card = (window.CardComponent && typeof window.CardComponent.createCard === 'function')
+                    ? window.CardComponent.createCard(item, itemCallbacks)
+                    : (window.UltraVid && window.UltraVid.card ? window.UltraVid.card.createCard(item, itemCallbacks) : null);
+                  if (card) {
+                    if (item && item.id) {
+                      card.setAttribute('data-vid', item.id);
+                    }
+                    card.setAttribute('data-subtopic', (item && item.sub_topic) || '');
+                    fragment.appendChild(card);
+                  }
+                });
+                container.appendChild(fragment);
+                refreshIcons();
+              }
+
+              state.initialized = true;
+              console.log(`[SpeculativePreloader] Category [${cat}] fully preloaded and mounted in background!`);
+            }
+          } catch (err) {
+            state.isFetching = false;
+            console.warn(`[SpeculativePreloader] Background pre-fetch for [${cat}] deferred:`, err);
+          }
+        }, delay);
+
+        delay += 1200; // Stagger each category by 1.2 seconds
+      });
+    });
+  }
+
+  function prewarmCategories() {
+    speculativePreloadCategories();
+  }
+
   async function initFeed(isFresh = true) {
     currentTab = 'home';
     currentCategory = 'all';
@@ -618,6 +850,9 @@ window.UltraVid = window.UltraVid || {};
 
     // Boot hydration: load 'all' category immediately
     await ensureCategoryLoaded('all');
+
+    // Trigger Speculative Eager Background Preloading immediately after 'all' mounts
+    speculativePreloadCategories();
   }
 
   function setFeedMode(mode) {
@@ -646,6 +881,159 @@ window.UltraVid = window.UltraVid || {};
     return feedStates;
   }
 
+  function getSkeletonMarkup(count = 4) {
+    let html = '';
+    for (let i = 0; i < count; i++) {
+      html += '<div class="skeleton-card"><div class="skeleton-thumb"></div><div class="skeleton-meta"><div class="skeleton-avatar"></div><div class="skeleton-lines"><div class="skeleton-line long"></div><div class="skeleton-line short"></div></div></div></div>';
+    }
+    return html;
+  }
+
+  function reconcileFeedViewport(targetKey) {
+    const key = targetKey || getActiveCategory();
+    const state = feedStates[key];
+    if (!state) return;
+
+    const container = document.getElementById(state.elId);
+    if (!container) return;
+
+    const realCards = container.querySelectorAll('.card:not(.skeleton-card)').length;
+
+    // DEADLOCK BREAKER: 0 cards and isFetching stuck for > 3.5s
+    if (realCards === 0 && state.isFetching && (Date.now() - (state.fetchStartTime || 0) > 3500)) {
+      console.warn(`[DeadlockBreaker] Breaking hung fetch lock on empty container for [${key}]!`);
+      state.isFetching = false;
+      state.fetchStartTime = 0;
+      if (state.abortController) {
+        try { state.abortController.abort(); } catch (e) {}
+        state.abortController = null;
+      }
+      if (activeAbortControllers[key]) {
+        try { activeAbortControllers[key].abort(); } catch (e) {}
+        delete activeAbortControllers[key];
+      }
+    }
+
+    // Condition A: Container is starved, but queue has preloaded items -> FLUSH IMMEDIATELY
+    if (realCards === 0 && state.queue && state.queue.length > 0) {
+      console.warn(`[SelfHealing] Universal starvation recovery triggered for [${key}]. Flushing ${state.queue.length} items.`);
+      renderNext(key, 0);
+      return;
+    }
+
+    // Condition B: Container is empty, queue is dry, and not actively fetching -> TRIGGER EMERGENCY HYDRATION
+    if (realCards === 0 && (!state.queue || state.queue.length === 0) && !state.isFetching) {
+      console.warn(`[SelfHealing] Emergency feed hydration for [${key}]`);
+      fetchBatch(key, 1);
+    }
+  }
+
+  // Trigger universal check whenever user switches category chips
+  window.reconcileFeedViewport = reconcileFeedViewport;
+
+  // Run reconciliation guard whenever active tab changes visibility
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      reconcileFeedViewport(getActiveCategory());
+    }
+  });
+
+  // Universal 1.5s invariant safety sweep across ACTIVE category and background categories
+  setInterval(() => {
+    const active = getActiveCategory();
+    reconcileFeedViewport(active);
+    ALL_CATEGORIES.forEach(cat => {
+      if (cat !== active && feedStates[cat] && feedStates[cat].queue && feedStates[cat].queue.length > 0) {
+        const cEl = document.getElementById(feedStates[cat].elId);
+        if (cEl && cEl.querySelectorAll('.card:not(.skeleton-card)').length === 0) {
+          renderNext(cat, 0);
+        }
+      }
+    });
+  }, 1500);
+
+  async function optimisticRefresh(categoryKey) {
+    const key = categoryKey || getActiveCategory();
+    const state = feedStates[key];
+    if (!state) return;
+
+    // 1. Forcibly abort in-flight requests and unlock mutex
+    if (state.abortController) {
+      try { state.abortController.abort(); } catch (e) {}
+      state.abortController = null;
+    }
+    if (activeAbortControllers[key]) {
+      try { activeAbortControllers[key].abort(); } catch (e) {}
+      delete activeAbortControllers[key];
+    }
+    state.isFetching = false;
+    state.fetchStartTime = 0;
+    state.epoch = (state.epoch || 0) + 1;
+    clearTimeout(safetyTimers[key]);
+
+    const container = document.getElementById(state.elId);
+
+    // 2. Non-Destructive Queue Flush (If items in RAM queue, prepend them in 0ms)
+    if (state.queue && state.queue.length > 0) {
+      const freshBatch = state.queue.splice(0, Math.min(6, state.queue.length));
+      if (container && freshBatch.length > 0) {
+        const skeletons = container.querySelectorAll('.skeleton-card');
+        skeletons.forEach(s => s.remove());
+
+        const fragment = document.createDocumentFragment();
+        freshBatch.forEach(item => {
+          if (item && item.id) {
+            const escapedId = window.CSS && window.CSS.escape ? window.CSS.escape(item.id) : item.id;
+            if (container.querySelector(`[data-vid="${escapedId}"]`)) return;
+          }
+          const card = (window.CardComponent && typeof window.CardComponent.createCard === 'function')
+            ? window.CardComponent.createCard(item, itemCallbacks)
+            : (window.UltraVid && window.UltraVid.card ? window.UltraVid.card.createCard(item, itemCallbacks) : null);
+          if (card) {
+            if (item && item.id) {
+              card.setAttribute('data-vid', item.id);
+            }
+            card.setAttribute('data-subtopic', (item && item.sub_topic) || '');
+            fragment.appendChild(card);
+          }
+        });
+        container.insertBefore(fragment, container.firstChild);
+        refreshIcons();
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      reconcileFeedViewport(key);
+      // Silently fetch background batch
+      if (state.queue.length <= 4 && state.hasMore) {
+        fetchBatch(key, state.page);
+      }
+      return;
+    }
+
+    // 3. If queue is dry, DO NOT purge existing cards (Zero-Blackout Guarantee).
+    // If container is completely empty (no cards), show skeleton placeholders
+    const existingCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+    if (existingCards === 0 && container && !container.querySelector('.skeleton-card')) {
+      container.innerHTML = getSkeletonMarkup(4);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    state.page = 1;
+    state.seenIds.clear();
+    await fetchBatch(key, 1);
+
+    if (container) {
+      const skeletons = container.querySelectorAll('.skeleton-card');
+      skeletons.forEach(s => s.remove());
+      if (state.queue.length > 0) {
+        renderNext(key, 0);
+      }
+      state.initialized = true;
+      if (state.hasMore && !state.isFetching) {
+        fetchBatch(key, 2);
+      }
+    }
+    reconcileFeedViewport(key);
+  }
+
   // Global Inspector Utility
   window.feedStates = feedStates;
   window.inspectFeedMetadata = (key = 'all') => {
@@ -655,9 +1043,24 @@ window.UltraVid = window.UltraVid || {};
     return q;
   };
 
+  // Expose ApiService compatibility shim
+  window.ApiService = window.ApiService || {
+    getFeed: (cat, page = 1, limit = 10, opts = {}) => {
+      if (window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.fetchFeed === 'function') {
+        return window.UltraVid.api.fetchFeed({ category: cat, page, limit, signal: opts && opts.signal }, opts);
+      }
+      return Promise.reject(new Error("API not available"));
+    }
+  };
+
+  if (window.UltraVid && window.UltraVid.card) {
+    window.CardComponent = window.CardComponent || window.UltraVid.card;
+  }
+
   window.UltraVid.feed = {
     init,
     initFeed,
+    initHomeFeed: initFeed,
     fetchBatch,
     renderNext,
     renderCards,
@@ -674,6 +1077,11 @@ window.UltraVid = window.UltraVid || {};
     prefetchThumbnails,
     inspectFeedMetadata: window.inspectFeedMetadata,
     showFeedError,
-    retryCategory
+    retryCategory,
+    prewarmCategories,
+    speculativePreloadCategories,
+    optimisticRefresh,
+    reconcileFeedViewport
   };
+  window.FeedComponent = window.UltraVid.feed;
 })();

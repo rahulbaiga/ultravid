@@ -9,6 +9,12 @@ window.UltraVid = window.UltraVid || {};
   function createCard(it, callbacks = {}) {
     const div = document.createElement("div");
     div.className = "card";
+    if (it && it.id) {
+      div.setAttribute("data-vid", it.id);
+    }
+    if (it && it.sub_topic) {
+      div.setAttribute("data-subtopic", it.sub_topic);
+    }
     if (typeof callbacks.onPlay === "function") {
       div.onclick = () => callbacks.onPlay(it);
     }
@@ -79,4 +85,5 @@ window.UltraVid = window.UltraVid || {};
     createCard,
     renderSkeleton
   };
+  window.CardComponent = window.UltraVid.card;
 })();

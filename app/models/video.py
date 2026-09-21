@@ -1,8 +1,11 @@
+"""Video, streaming, extraction, and download domain models."""
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
+
 
 class ExtractRequest(BaseModel):
     url: str = Field(..., description="Video page URL or raw search text")
+
 
 class StreamFormat(BaseModel):
     format_id: Optional[str] = None
@@ -23,6 +26,7 @@ class StreamFormat(BaseModel):
     protocol: Optional[str] = None
     format_note: Optional[str] = None
 
+
 class ExtractResponse(BaseModel):
     title: Optional[str] = None
     duration: Optional[int] = None
@@ -41,31 +45,30 @@ class ExtractResponse(BaseModel):
     playable_streams: List[StreamFormat] = []
     default_play_url: Optional[str] = None
 
-class SearchResultItem(BaseModel):
-    id: Optional[str] = None
-    title: Optional[str] = None
-    url: Optional[str] = None
-    duration: Optional[Any] = None
-    thumbnail: Optional[str] = None
+
+class VideoDetails(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
     uploader: Optional[str] = None
     channel: Optional[str] = None
-    channelTitle: Optional[str] = None
     views: Optional[Any] = None
-    publishedTime: Optional[str] = None
-    channelAvatar: Optional[str] = None
-    isLive: Optional[bool] = False
+    view_count: Optional[int] = None
+    duration: Optional[int] = None
+    duration_str: Optional[str] = None
+    thumbnail: Optional[str] = None
+    formats: List[StreamFormat] = []
+    video_streams: List[StreamFormat] = []
+    audio_streams: List[StreamFormat] = []
+    default_play_url: Optional[str] = None
+    related: List[Dict[str, Any]] = []
 
-    class Config:
-        extra = "allow"
-
-class SearchResponse(BaseModel):
-    query: str
-    results: List[SearchResultItem] = []
 
 class DownloadRequest(BaseModel):
     url: str
     quality: Optional[str] = "720"
     audio_only: Optional[bool] = False
+
 
 class DownloadResponse(BaseModel):
     task_id: str

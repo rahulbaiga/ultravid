@@ -1,7 +1,7 @@
 """InnerTube turbo engine - persistent HTTP/2, ANDROID compact search, TTL cache."""
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from typing import Dict, Any, List, Optional
 import httpx
 
@@ -395,25 +395,90 @@ TOPIC_CATEGORIES: Dict[str, List[str]] = {
 
 TRENDING_TOPICS = TOPIC_CATEGORIES["all"]
 
-# LRU cache of recently displayed video IDs to prevent showing duplicate videos across refreshes
+# Explicit, hardened category-to-query synthesis dictionary
+CATEGORY_QUERIES: Dict[str, Optional[str]] = {
+    "all": None,  # Fetches natural home/trending feed
+    "gaming": "gaming gameplay walkthrough esports live",
+    "tech": "technology gadgets smartphone AI review unboxing",
+    "movies": "movie trailer official clips cinema teaser",
+    "music": "official music video new songs hits audio",
+    "science": "science documentary astronomy physics technology",
+    "sports": "sports highlights cricket football match moments",
+    "comedy": "stand up comedy humor sketch comedy",
+    "food": "street food cooking recipes food travel vlog",
+    "trending": None  # Handled via trending endpoint
+}
+
+# Category-isolated fallback reserves to prevent cross-category contamination
+_CATEGORY_RESERVES: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+_FEED_RESERVE: List[Dict[str, Any]] = []
+
+# Category-isolated seen tracking
+_CATEGORY_SEEN: Dict[str, OrderedDict[str, float]] = defaultdict(OrderedDict)
 _SEEN_VIDEOS: OrderedDict[str, float] = OrderedDict()
 _SEEN_VIDEOS_MAX = 500
 
-_FEED_RESERVE: List[Dict[str, Any]] = []
+def get_category_reserve(category: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return in-memory fallback reserve strictly for the requested category."""
+    cat_key = (category or "all").lower().strip()
+    if cat_key in ("all", "trending"):
+        return _FEED_RESERVE or _CATEGORY_RESERVES.get("all", [])
+    return _CATEGORY_RESERVES.get(cat_key, [])
 
 async def fast_feed(page: int = 1, limit: int = 12, seed: int = 0, category: Optional[str] = None) -> Dict[str, Any]:
     page = max(1, int(page or 1))
     limit = max(1, min(25, int(limit or 12)))
+    cat_key = (category or "all").lower().strip()
 
-    # Select topic list by category or fallback to all
-    topic_pool = TOPIC_CATEGORIES.get((category or "").lower().strip()) or TRENDING_TOPICS
+    # Specialized category handling with dedicated contextual query synthesis
+    base_query = CATEGORY_QUERIES.get(cat_key)
+    if base_query:
+        suffixes = ["", " latest", " 2026", " trending", " viral", " highlights", " top", " new"]
+        cycle = (page - 1) % len(suffixes)
+        query = f"{base_query}{suffixes[cycle]}" if cycle > 0 else base_query
+        try:
+            r = await fast_search(query, max_results=max(30, limit * 2))
+            items = (r.get("results", []) or [])
+            if items:
+                cat_seen = _CATEGORY_SEEN[cat_key]
+                unseen = [v for v in items if v.get("id") and v["id"] not in cat_seen]
+                chosen = unseen[:limit] if len(unseen) >= limit else (unseen + [v for v in items if v not in unseen])[:limit]
+
+                now = time.time()
+                for v in chosen:
+                    if v.get("id"):
+                        cat_seen[v["id"]] = now
+                        if len(cat_seen) > 300:
+                            cat_seen.popitem(last=False)
+
+                res_list = _CATEGORY_RESERVES[cat_key]
+                for it in chosen:
+                    if it not in res_list:
+                        res_list.append(it)
+                if len(res_list) > 100:
+                    del res_list[:len(res_list) - 100]
+
+                return {"query": f"feed:{cat_key}", "results": chosen, "page": page, "category": cat_key}
+        except Exception:
+            pass
+
+        # Fallback strictly to category-isolated reserve
+        res_list = _CATEGORY_RESERVES.get(cat_key, [])
+        if res_list:
+            rot = ((page - 1) * limit) % max(1, len(res_list))
+            rotated = res_list[rot:] + res_list[:rot]
+            return {"query": f"feed:{cat_key}", "results": rotated[:limit], "page": page, "category": cat_key}
+
+        return {"query": f"feed:{cat_key}", "results": [], "page": page, "category": cat_key}
+
+    # Standard home/discovery feed ('all' or 'trending' or unknown category)
+    topic_pool = TOPIC_CATEGORIES.get("all") or TRENDING_TOPICS
     cycle_num = (page - 1) // len(topic_pool)
     start_idx = (page - 1 + int(seed or 0)) % len(topic_pool)
-    
+
     suffixes = ["", " latest", " 2026", " trending", " viral", " highlights", " top", " new"]
     suffix = suffixes[cycle_num % len(suffixes)]
 
-    # Search through topic candidates until we gather enough fresh, unseen videos
     for offset in range(len(topic_pool)):
         idx = (start_idx + offset) % len(topic_pool)
         base_topic = topic_pool[idx]
@@ -444,27 +509,65 @@ async def fast_feed(page: int = 1, limit: int = 12, seed: int = 0, category: Opt
             for it in chosen:
                 if it not in _FEED_RESERVE:
                     _FEED_RESERVE.append(it)
+                if it not in _CATEGORY_RESERVES["all"]:
+                    _CATEGORY_RESERVES["all"].append(it)
             if len(_FEED_RESERVE) > 200:
-                del _FEED_RESERVE[:len(_FEED_RESERVE)-200]
+                del _FEED_RESERVE[:len(_FEED_RESERVE) - 200]
 
-            return {"query": f"feed:{base_topic}", "results": chosen, "page": page, "topic": base_topic}
+            return {"query": f"feed:{base_topic}", "results": chosen, "page": page, "topic": base_topic, "category": "all"}
         except Exception:
             continue
 
-    # Fallback to reserve cache with page rotation if queries fail
     if _FEED_RESERVE:
         unseen_reserve = [v for v in _FEED_RESERVE if v.get("id") not in _SEEN_VIDEOS]
         pool = unseen_reserve if len(unseen_reserve) >= limit else _FEED_RESERVE
         rot = ((page - 1) * limit) % max(1, len(pool))
         rotated = pool[rot:] + pool[:rot]
-        return {"query": "feed:Trending", "results": rotated[:limit], "page": page, "topic": "Trending"}
+        return {"query": "feed:Trending", "results": rotated[:limit], "page": page, "topic": "Trending", "category": "all"}
 
-    return {"query": "feed:Trending", "results": [], "page": page, "topic": "Trending"}
+    return {"query": "feed:Trending", "results": [], "page": page, "topic": "Trending", "category": "all"}
+
+async def get_feed(category: Optional[str] = None, page: int = 1, limit: int = 12, seed: int = 0) -> Dict[str, Any]:
+    """Qualified feed resolver matching get_feed interface."""
+    return await fast_feed(page=page, limit=limit, seed=seed, category=category)
 
 def fast_feed_sync(page: int = 1, limit: int = 10, seed: int = 0, category: Optional[str] = None) -> Dict[str, Any]:
     page = max(1, int(page or 1))
     limit = max(1, min(10, int(limit or 10)))
-    topic_pool = TOPIC_CATEGORIES.get((category or "").lower().strip()) or TRENDING_TOPICS
+    cat_key = (category or "all").lower().strip()
+
+    base_query = CATEGORY_QUERIES.get(cat_key)
+    if base_query:
+        suffixes = ["", " latest", " 2026", " trending", " viral", " highlights", " top", " new"]
+        cycle = (page - 1) % len(suffixes)
+        query = f"{base_query}{suffixes[cycle]}" if cycle > 0 else base_query
+        try:
+            r = fast_search_sync(query, max_results=max(20, limit * 2))
+            items = (r.get("results", []) or [])
+            if items:
+                cat_seen = _CATEGORY_SEEN[cat_key]
+                unseen = [v for v in items if v.get("id") and v["id"] not in cat_seen]
+                chosen = (unseen or items)[:limit]
+                now = time.time()
+                for v in chosen:
+                    if v.get("id"):
+                        cat_seen[v["id"]] = now
+                res_list = _CATEGORY_RESERVES[cat_key]
+                for it in chosen:
+                    if it not in res_list:
+                        res_list.append(it)
+                return {"query": f"feed:{cat_key}", "results": chosen, "page": page, "category": cat_key}
+        except Exception:
+            pass
+
+        res_list = _CATEGORY_RESERVES.get(cat_key, [])
+        if res_list:
+            rot = ((page - 1) * limit) % max(1, len(res_list))
+            rotated = res_list[rot:] + res_list[:rot]
+            return {"query": f"feed:{cat_key}", "results": rotated[:limit], "page": page, "category": cat_key}
+        return {"query": f"feed:{cat_key}", "results": [], "page": page, "category": cat_key}
+
+    topic_pool = TOPIC_CATEGORIES.get("all") or TRENDING_TOPICS
     start_idx = (page - 1 + int(seed or 0)) % len(topic_pool)
 
     for offset in range(len(topic_pool)):
@@ -480,11 +583,23 @@ def fast_feed_sync(page: int = 1, limit: int = 10, seed: int = 0, category: Opti
                 for v in chosen:
                     if v.get("id"):
                         _SEEN_VIDEOS[v["id"]] = now
-                return {"query": f"feed:{topic}", "results": chosen, "page": page, "topic": topic}
+                for it in chosen:
+                    if it not in _FEED_RESERVE:
+                        _FEED_RESERVE.append(it)
+                return {"query": f"feed:{topic}", "results": chosen, "page": page, "topic": topic, "category": "all"}
         except Exception:
             continue
 
     if _FEED_RESERVE:
-        return {"query": "feed:Trending", "results": _FEED_RESERVE[:limit], "page": page, "topic": "Trending"}
-    return {"query": "feed:Trending", "results": [], "page": page, "topic": "Trending"}
+        return {"query": "feed:Trending", "results": _FEED_RESERVE[:limit], "page": page, "topic": "Trending", "category": "all"}
+    return {"query": "feed:Trending", "results": [], "page": page, "topic": "Trending", "category": "all"}
+
+def get_feed_sync(category: Optional[str] = None, page: int = 1, limit: int = 10, seed: int = 0) -> Dict[str, Any]:
+    return fast_feed_sync(page=page, limit=limit, seed=seed, category=category)
+
+try:
+    from app.services.innertube import CATEGORY_TAXONOMY, anti_cluster_rerank, get_diverse_category_feed, PAGE_MODIFIERS, get_page_modified_query
+except ImportError:
+    pass
+
 

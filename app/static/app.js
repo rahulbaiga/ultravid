@@ -124,17 +124,140 @@
       ? playerComp.getIsWatchOpen()
       : (watchView && !watchView.classList.contains('hidden'));
 
-    if (isWatchOpen || (e.state && e.state.view !== 'watch')) {
+    if (isWatchOpen) {
       if (playerComp && typeof playerComp.teardownWatchUI === 'function') {
         playerComp.teardownWatchUI();
       } else if (playerComp && typeof playerComp.showHomeView === 'function') {
         playerComp.showHomeView();
       }
+      return;
+    }
+
+    // 4. Category / Feed Back-Navigation
+    const targetCategory = (e.state && e.state.category)
+      ? e.state.category
+      : (window.location.hash && window.location.hash.startsWith('#feed/')
+          ? window.location.hash.replace('#feed/', '').trim()
+          : 'all');
+
+    window.currentActiveCategory = targetCategory;
+
+    // Ensure we are in home tab when restoring a category feed
+    const feed = (window.UltraVid && window.UltraVid.feed) || window.FeedComponent;
+    if (feed && typeof feed.switchTab === 'function' && feed.getCurrentTab && feed.getCurrentTab() !== 'home') {
+      feed.switchTab('home');
+    }
+
+    const chips = (window.UltraVid && window.UltraVid.chips) || window.ChipsComponent;
+    if (chips && typeof chips.selectCategory === 'function') {
+      chips.selectCategory(targetCategory, false);
+    } else if (window.ChipsComponent && typeof window.ChipsComponent.selectCategory === 'function') {
+      window.ChipsComponent.selectCategory(targetCategory, false);
+    } else if (feed && typeof feed.switchCategory === 'function') {
+      feed.switchCategory(targetCategory);
+      document.querySelectorAll('.chip, .chip-btn').forEach(btn => {
+        const cat = btn.dataset.category || btn.dataset.cat;
+        btn.classList.toggle('active', cat === targetCategory);
+      });
+    }
+
+    if (typeof window.reconcileFeedViewport === 'function') {
+      window.reconcileFeedViewport(targetCategory);
     }
   });
 
+  // Custom Pull-to-Refresh Gesture Engine with Elastic Damping (YouTube-style)
+  let touchStartY = 0;
+  let isPulling = false;
+  let ptrSpinner = null;
+  let ptrDismissTimer = null;
+  const PULL_THRESHOLD = 75;
+
+  function canPullToRefresh() {
+    if (window.scrollY > 0) return false;
+    const watchView = document.getElementById('watchView');
+    if (watchView && !watchView.classList.contains('hidden')) return false;
+    const searchOverlay = document.getElementById('searchOverlay');
+    if (searchOverlay && !searchOverlay.classList.contains('hidden')) return false;
+    const actionOverlay = document.getElementById('quickActionOverlay');
+    if (actionOverlay && !actionOverlay.classList.contains('hidden')) return false;
+    const dlOverlay = document.getElementById('dlOverlay');
+    if (dlOverlay && !dlOverlay.classList.contains('hidden')) return false;
+    return true;
+  }
+
+  function getPtrSpinner() {
+    if (!ptrSpinner) {
+      ptrSpinner = document.getElementById('ptrSpinner');
+    }
+    return ptrSpinner;
+  }
+
+  window.addEventListener('touchstart', (e) => {
+    if (canPullToRefresh() && e.touches && e.touches.length === 1) {
+      touchStartY = e.touches[0].clientY;
+      isPulling = true;
+    } else {
+      isPulling = false;
+    }
+  }, { passive: true });
+
+  window.addEventListener('touchmove', (e) => {
+    if (!isPulling || window.scrollY > 0) return;
+    const currentY = e.touches[0].clientY;
+    const pullDistance = (currentY - touchStartY) * 0.45; // Elastic damping factor
+
+    const spinner = getPtrSpinner();
+    if (pullDistance > 10 && spinner) {
+      spinner.classList.add('visible');
+      spinner.style.top = Math.min(pullDistance + 10, 85) + 'px';
+    }
+  }, { passive: true });
+
+  window.addEventListener('touchend', async (e) => {
+    if (!isPulling) return;
+    isPulling = false;
+    const currentY = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0].clientY : touchStartY;
+    const pullDistance = (currentY - touchStartY) * 0.45;
+    const spinner = getPtrSpinner();
+
+    if (pullDistance >= PULL_THRESHOLD) {
+      if (spinner) spinner.style.top = '70px';
+      // Trigger 0ms instant optimistic refresh
+      const activeCat = window.currentActiveCategory
+        || (window.UltraVid && window.UltraVid.chips && typeof window.UltraVid.chips.getCategory === 'function' ? window.UltraVid.chips.getCategory() : null)
+        || 'all';
+      const feed = (window.UltraVid && window.UltraVid.feed) || window.FeedComponent;
+      if (feed && typeof feed.optimisticRefresh === 'function') {
+        await feed.optimisticRefresh(activeCat);
+      } else if (window.FeedComponent && typeof window.FeedComponent.optimisticRefresh === 'function') {
+        await window.FeedComponent.optimisticRefresh(activeCat);
+      }
+    }
+
+    // Dismiss spinner cleanly
+    clearTimeout(ptrDismissTimer);
+    ptrDismissTimer = setTimeout(() => {
+      if (spinner) {
+        spinner.style.top = '-50px';
+        setTimeout(() => spinner.classList.remove('visible'), 200);
+      }
+    }, 300);
+  }, { passive: true });
+
   function bootstrap() {
     const { utils, api, card, actionSheet, player, header, chips, bottomNav, feed } = window.UltraVid;
+
+    // 0. Base State Bootstrapping
+    const hash = window.location.hash || '';
+    if (!history.state) {
+      if (hash.startsWith('#feed/')) {
+        const cat = hash.replace('#feed/', '').trim() || 'all';
+        history.replaceState({ view: 'feed', category: cat }, '', hash);
+      } else if (!hash.startsWith('#watch/')) {
+        history.replaceState({ view: 'feed', category: 'all' }, '', '#feed/all');
+      }
+    }
 
     // 1. Initialize Quick Action Sheet
     actionSheet.init({
@@ -168,7 +291,11 @@
       onLogoClick: () => {
         player.pause();
         feed.switchTab("home");
-        feed.switchCategory("all");
+        if (chips && typeof chips.selectCategory === "function") {
+          chips.selectCategory("all", true);
+        } else {
+          feed.switchCategory("all");
+        }
         window.scrollTo({ top: 0, behavior: "smooth" });
       },
       onClear: () => {}
@@ -203,10 +330,17 @@
 
     // 7. Initial Feed Mount & Icons
     utils.refreshIcons();
-    feed.initFeed(true);
+    const initialCategoryFromHash = hash.startsWith('#feed/') ? hash.replace('#feed/', '').trim() : null;
+
+    feed.initFeed(true).then(() => {
+      if (initialCategoryFromHash && initialCategoryFromHash !== 'all') {
+        if (chips && typeof chips.selectCategory === 'function') {
+          chips.selectCategory(initialCategoryFromHash, false);
+        }
+      }
+    });
 
     // 8. Handle direct watch URL hash if present
-    const hash = window.location.hash;
     if (hash && hash.startsWith("#watch/")) {
       const vidId = hash.replace("#watch/", "").trim();
       if (vidId) {
