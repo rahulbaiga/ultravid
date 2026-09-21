@@ -42,8 +42,11 @@ class MainActivity : Activity() {
 
     override fun onBackPressed() {
         val wv = webView
-        if (wv != null && wv.canGoBack()) wv.goBack()
-        else super.onBackPressed()
+        if (wv != null && wv.canGoBack()) {
+            wv.goBack()
+        } else {
+            super.onBackPressed()
+        }
     }
 
     override fun onDestroy() {

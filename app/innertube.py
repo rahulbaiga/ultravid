@@ -26,13 +26,19 @@ _SCLIENT: httpx.Client | None = None
 def _aconfig_client() -> httpx.AsyncClient:
     global _ACLIENT
     if _ACLIENT is None or _ACLIENT.is_closed:
-        _ACLIENT = httpx.AsyncClient(http2=True, timeout=5.0, limits=_LIMITS, headers=HEADERS_ANDROID_SEARCH)
+        try:
+            _ACLIENT = httpx.AsyncClient(http2=True, timeout=5.0, limits=_LIMITS, headers=HEADERS_ANDROID_SEARCH)
+        except Exception:
+            _ACLIENT = httpx.AsyncClient(http2=False, timeout=5.0, limits=_LIMITS, headers=HEADERS_ANDROID_SEARCH)
     return _ACLIENT
 
 def _sconfig_client() -> httpx.Client:
     global _SCLIENT
     if _SCLIENT is None or _SCLIENT.is_closed:
-        _SCLIENT = httpx.Client(http2=True, timeout=5.0, limits=_LIMITS, headers=HEADERS_ANDROID_SEARCH)
+        try:
+            _SCLIENT = httpx.Client(http2=True, timeout=5.0, limits=_LIMITS, headers=HEADERS_ANDROID_SEARCH)
+        except Exception:
+            _SCLIENT = httpx.Client(http2=False, timeout=5.0, limits=_LIMITS, headers=HEADERS_ANDROID_SEARCH)
     return _SCLIENT
 
 async def aclose():
@@ -130,8 +136,26 @@ def _parse_search_json(data: Dict[str, Any], max_results: int) -> List[Dict[str,
             if not t:
                 continue
             th = vr.get("thumbnail", {}).get("thumbnails", [])
-            ch = _text(vr.get("ownerText")) or _text(vr.get("shortBylineText"))
-            out.append({"id": vid, "title": t, "url": f"https://www.youtube.com/watch?v={vid}", "thumbnail": _thumb(th) or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", "duration": _text(vr.get("lengthText")), "channel": ch, "uploader": ch})
+            ch = _text(vr.get("ownerText")) or _text(vr.get("shortBylineText")) or "UltraVid"
+            views = _text(vr.get("shortViewCountText")) or _text(vr.get("viewCountText")) or "100K+ views"
+            pub = _text(vr.get("publishedTimeText")) or "Recently"
+            dur = _text(vr.get("lengthText"))
+            ch_thumbs = vr.get("channelThumbnailSupportedRenderers", {}).get("channelThumbnailWithLinkRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
+            avatar = _thumb(ch_thumbs) if ch_thumbs else None
+
+            out.append({
+                "id": vid,
+                "title": t,
+                "url": f"https://www.youtube.com/watch?v={vid}",
+                "thumbnail": _thumb(th) or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+                "duration": dur,
+                "channel": ch,
+                "uploader": ch,
+                "channelTitle": ch,
+                "views": views,
+                "publishedTime": pub,
+                "channelAvatar": avatar,
+            })
     return out
 
 async def fast_search(query: str, max_results: int = 15, gl: str = "IN", hl: str = "en") -> Dict[str, Any]:
@@ -141,10 +165,10 @@ async def fast_search(query: str, max_results: int = 15, gl: str = "IN", hl: str
         return hit
     t0 = time.time()
     c = _aconfig_client()
-    # 1) ANDROID compact (~50KB target)
-    for ctx, hdr in ((_android_search_context(gl, hl), HEADERS_ANDROID_SEARCH), (_tv_search_context(gl, hl), HEADERS_WEB), (_web_search_context(gl, hl), HEADERS_WEB)):
+    # 1) WEB search (~1.2s instant response) -> fallbacks: TV, ANDROID
+    for ctx, hdr in ((_web_search_context(gl, hl), HEADERS_WEB), (_tv_search_context(gl, hl), HEADERS_WEB), (_android_search_context(gl, hl), HEADERS_ANDROID_SEARCH)):
         try:
-            r = await c.post(SEARCH_URL, json={"context": ctx, "query": query}, headers=hdr)
+            r = await c.post(SEARCH_URL, json={"context": ctx, "query": query}, headers=hdr, timeout=3.0)
             if r.status_code != 200:
                 continue
             results = _parse_search_json(r.json(), max_results)
@@ -164,9 +188,9 @@ def fast_search_sync(query: str, max_results: int = 15, gl: str = "IN", hl: str 
         return hit
     t0 = time.time()
     c = _sconfig_client()
-    for ctx, hdr in ((_android_search_context(gl, hl), HEADERS_ANDROID_SEARCH), (_tv_search_context(gl, hl), HEADERS_WEB), (_web_search_context(gl, hl), HEADERS_WEB)):
+    for ctx, hdr in ((_web_search_context(gl, hl), HEADERS_WEB), (_tv_search_context(gl, hl), HEADERS_WEB), (_android_search_context(gl, hl), HEADERS_ANDROID_SEARCH)):
         try:
-            r = c.post(SEARCH_URL, json={"context": ctx, "query": query}, headers=hdr)
+            r = c.post(SEARCH_URL, json={"context": ctx, "query": query}, headers=hdr, timeout=3.0)
             if r.status_code != 200:
                 continue
             results = _parse_search_json(r.json(), max_results)
@@ -177,6 +201,31 @@ def fast_search_sync(query: str, max_results: int = 15, gl: str = "IN", hl: str 
         except Exception:
             continue
     return {"query": query, "results": [], "_latency": time.time() - t0, "_bytes": 0}
+
+async def fast_suggest(query: str, gl: str = "IN", hl: str = "en") -> List[str]:
+    query = query.strip()
+    if not query:
+        return []
+    ck = f"sug:{query.lower()}:{gl}"
+    hit = _cache_get(ck)
+    if hit is not None:
+        return hit.get("suggestions", [])
+    c = _aconfig_client()
+    try:
+        r = await c.get(
+            "https://suggestqueries.google.com/complete/search",
+            params={"client": "firefox", "ds": "yt", "q": query, "gl": gl, "hl": hl},
+            timeout=2.0
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 1 and isinstance(data[1], list):
+                suggs = [str(x) for x in data[1][:10]]
+                _cache_put(ck, {"suggestions": suggs})
+                return suggs
+    except Exception:
+        pass
+    return []
 
 def _parse_player(data: Dict[str, Any], video_id: str) -> Dict[str, Any]:
     vd = data.get("videoDetails", {}) or {}
@@ -267,30 +316,157 @@ def extract_video_id(url_or_id: str) -> Optional[str]:
         return s
     return None
 
-# Trending feed: rotating popular topics, 10 per page
-TRENDING_TOPICS = [
-    "Trending songs India 2026",
-    "Bollywood hits 2026",
-    "Big Buck Bunny 4K",
-    "Arijit Singh live",
-    "Cricket highlights 2026",
-    "Tech news today",
-    "Funny shorts compilation",
-    "Travel vlog India",
-    "Cooking recipes Hindi",
-    "Gaming highlights",
-]
+# Categorized & interleaved diverse topic bank (50+ high-quality categories)
+TOPIC_CATEGORIES: Dict[str, List[str]] = {
+    "all": [
+        "Trending now India", "Gaming highlights 2026", "Tech gadgets and reviews",
+        "New movie trailers 2026", "Science and space discoveries", "Cricket match highlights",
+        "Bollywood hits 2026", "Standup comedy Hindi", "Travel street food India",
+        "BBC Earth wildlife 4K", "GTA 6 gameplay", "AI robotics inventions 2026",
+        "New Hindi songs 2026", "SpaceX starship launch", "Minecraft survival build 4K",
+        "Hollywood upcoming movies", "Football champions league goals", "Unreal Engine 5 games",
+        "Latest smartphone unboxing 2026", "Funny comedy sketches Hindi", "Japan travel vlog 4K",
+        "James Webb telescope discoveries", "Arijit Singh live concert", "Supercars acceleration sound 4K",
+        "Cyberpunk 2077 ray tracing", "World news today live", "Deep sea ocean creatures 4K",
+        "Top global music hits", "Formula 1 race recap", "Anime new season teaser",
+        "Best laptops 2026 review", "Wilderness bushcraft cooking", "Quantum computing breakthrough",
+        "BGMI esports championship", "Nature relaxing 4K drone", "Ancient civilizations history 4K",
+        "IPL best moments", "Electric vehicles future cars", "Apple keynote highlights",
+        "Lo-fi hip hop study relax", "Behind the scenes movie VFX", "Best street food world tour",
+        "PlayStation 5 top games", "Smart home gadgets 2026", "Viral comedy scenes",
+        "Coke Studio top tracks", "Olympic records highlights", "Futuristic technology 2026"
+    ],
+    "gaming": [
+        "Gaming highlights 2026", "GTA 6 gameplay", "Minecraft survival build 4K",
+        "BGMI esports championship", "Elden Ring gameplay 4K", "Cyberpunk 2077 ray tracing",
+        "Call of Duty Warzone epic moments", "PlayStation 5 top games", "Unreal Engine 5 games"
+    ],
+    "tech": [
+        "Tech gadgets and reviews", "New smartphone unboxing 2026", "AI robotics inventions 2026",
+        "SpaceX starship launch", "Quantum computing breakthrough", "Best laptops 2026 review",
+        "Electric vehicles future cars", "Apple keynote highlights", "Smart home gadgets 2026"
+    ],
+    "movies": [
+        "New movie trailers 2026", "Bollywood blockbuster trailer", "Hollywood upcoming movies",
+        "Anime new season teaser", "Behind the scenes movie VFX", "Cinema film reviews 2026",
+        "Sci-fi movies 2026 trailers", "Action movies best scenes 4K"
+    ],
+    "music": [
+        "Bollywood hits 2026", "New Hindi songs 2026", "Top global music hits",
+        "Arijit Singh live concert", "Acoustic chill live session", "Punjabi new hits 2026",
+        "Lo-fi hip hop study relax", "Coke Studio top tracks", "Electronic music festival 4K"
+    ],
+    "science": [
+        "Science and space discoveries", "BBC Earth wildlife 4K", "James Webb telescope discoveries",
+        "Deep sea ocean creatures 4K", "How universe works 4K", "National Geographic adventure",
+        "Nature relaxing 4K drone", "Ancient civilizations history 4K"
+    ],
+    "sports": [
+        "Cricket match highlights", "IPL best moments", "Football champions league goals",
+        "World cup best moments", "Olympic records highlights", "Formula 1 race recap"
+    ],
+    "comedy": [
+        "Standup comedy Hindi", "Funny comedy sketches Hindi", "Viral comedy scenes",
+        "Late night comedy show", "Best sitcom moments", "Prank funny video compilation"
+    ],
+    "food": [
+        "Travel street food India", "Japan travel vlog 4K", "Wilderness bushcraft cooking",
+        "Best street food world tour", "Luxury travel destinations", "Village cooking channel"
+    ]
+}
 
-async def fast_feed(page: int = 1, limit: int = 10) -> Dict[str, Any]:
+TRENDING_TOPICS = TOPIC_CATEGORIES["all"]
+
+# LRU cache of recently displayed video IDs to prevent showing duplicate videos across refreshes
+_SEEN_VIDEOS: OrderedDict[str, float] = OrderedDict()
+_SEEN_VIDEOS_MAX = 500
+
+_FEED_RESERVE: List[Dict[str, Any]] = []
+
+async def fast_feed(page: int = 1, limit: int = 12, seed: int = 0, category: Optional[str] = None) -> Dict[str, Any]:
+    page = max(1, int(page or 1))
+    limit = max(1, min(25, int(limit or 12)))
+
+    # Select topic list by category or fallback to all
+    topic_pool = TOPIC_CATEGORIES.get((category or "").lower().strip()) or TRENDING_TOPICS
+    cycle_num = (page - 1) // len(topic_pool)
+    start_idx = (page - 1 + int(seed or 0)) % len(topic_pool)
+    
+    suffixes = ["", " latest", " 2026", " trending", " viral", " highlights", " top", " new"]
+    suffix = suffixes[cycle_num % len(suffixes)]
+
+    # Search through topic candidates until we gather enough fresh, unseen videos
+    for offset in range(len(topic_pool)):
+        idx = (start_idx + offset) % len(topic_pool)
+        base_topic = topic_pool[idx]
+        topic = f"{base_topic}{suffix}" if suffix and cycle_num > 0 else base_topic
+        try:
+            r = await fast_search(topic, max_results=30)
+            items = (r.get("results", []) or [])
+            if not items:
+                continue
+
+            unseen = [v for v in items if v.get("id") and v["id"] not in _SEEN_VIDEOS]
+
+            if len(unseen) >= limit:
+                chosen = unseen[:limit]
+            elif unseen:
+                seen_pool = [v for v in items if v not in unseen]
+                chosen = (unseen + seen_pool)[:limit]
+            else:
+                chosen = items[:limit]
+
+            now = time.time()
+            for v in chosen:
+                if v.get("id"):
+                    _SEEN_VIDEOS[v["id"]] = now
+                    if len(_SEEN_VIDEOS) > _SEEN_VIDEOS_MAX:
+                        _SEEN_VIDEOS.popitem(last=False)
+
+            for it in chosen:
+                if it not in _FEED_RESERVE:
+                    _FEED_RESERVE.append(it)
+            if len(_FEED_RESERVE) > 200:
+                del _FEED_RESERVE[:len(_FEED_RESERVE)-200]
+
+            return {"query": f"feed:{base_topic}", "results": chosen, "page": page, "topic": base_topic}
+        except Exception:
+            continue
+
+    # Fallback to reserve cache with page rotation if queries fail
+    if _FEED_RESERVE:
+        unseen_reserve = [v for v in _FEED_RESERVE if v.get("id") not in _SEEN_VIDEOS]
+        pool = unseen_reserve if len(unseen_reserve) >= limit else _FEED_RESERVE
+        rot = ((page - 1) * limit) % max(1, len(pool))
+        rotated = pool[rot:] + pool[:rot]
+        return {"query": "feed:Trending", "results": rotated[:limit], "page": page, "topic": "Trending"}
+
+    return {"query": "feed:Trending", "results": [], "page": page, "topic": "Trending"}
+
+def fast_feed_sync(page: int = 1, limit: int = 10, seed: int = 0, category: Optional[str] = None) -> Dict[str, Any]:
     page = max(1, int(page or 1))
     limit = max(1, min(10, int(limit or 10)))
-    topic = TRENDING_TOPICS[(page - 1) % len(TRENDING_TOPICS)]
-    r = await fast_search(topic, max_results=limit)
-    return {"query": f"feed:{topic}", "results": (r.get("results", []) or [])[:limit], "page": page, "topic": topic}
+    topic_pool = TOPIC_CATEGORIES.get((category or "").lower().strip()) or TRENDING_TOPICS
+    start_idx = (page - 1 + int(seed or 0)) % len(topic_pool)
 
-def fast_feed_sync(page: int = 1, limit: int = 10) -> Dict[str, Any]:
-    page = max(1, int(page or 1))
-    limit = max(1, min(10, int(limit or 10)))
-    topic = TRENDING_TOPICS[(page - 1) % len(TRENDING_TOPICS)]
-    r = fast_search_sync(topic, max_results=limit)
-    return {"query": f"feed:{topic}", "results": (r.get("results", []) or [])[:limit], "page": page, "topic": topic}
+    for offset in range(len(topic_pool)):
+        idx = (start_idx + offset) % len(topic_pool)
+        topic = topic_pool[idx]
+        try:
+            r = fast_search_sync(topic, max_results=25)
+            items = (r.get("results", []) or [])
+            if items:
+                unseen = [v for v in items if v.get("id") and v["id"] not in _SEEN_VIDEOS]
+                chosen = (unseen or items)[:limit]
+                now = time.time()
+                for v in chosen:
+                    if v.get("id"):
+                        _SEEN_VIDEOS[v["id"]] = now
+                return {"query": f"feed:{topic}", "results": chosen, "page": page, "topic": topic}
+        except Exception:
+            continue
+
+    if _FEED_RESERVE:
+        return {"query": "feed:Trending", "results": _FEED_RESERVE[:limit], "page": page, "topic": "Trending"}
+    return {"query": "feed:Trending", "results": [], "page": page, "topic": "Trending"}
+

@@ -49,6 +49,13 @@ class SearchResultItem(BaseModel):
     thumbnail: Optional[str] = None
     uploader: Optional[str] = None
     channel: Optional[str] = None
+    channelTitle: Optional[str] = None
+    views: Optional[Any] = None
+    publishedTime: Optional[str] = None
+    channelAvatar: Optional[str] = None
+
+    class Config:
+        extra = "allow"
 
 class SearchResponse(BaseModel):
     query: str

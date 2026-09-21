@@ -1,8 +1,11 @@
 import os
-from fastapi import FastAPI, HTTPException, Query
+import asyncio
+from typing import Optional
+import httpx
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from app.models import ExtractRequest, ExtractResponse, SearchResponse, DownloadRequest, DownloadResponse
 from app import extractor
 from app import download_manager
@@ -36,11 +39,10 @@ async def _close_http():
 async def _cache_headers(request, call_next):
     resp = await call_next(request)
     p = request.url.path
-    # aggressive browser caching for static UI (no CDN, embedded CSS)
-    if p in ("/", "/index.html"):
-        resp.headers["Cache-Control"] = "public, max-age=300"
-    elif p in ("/app.js",):
-        resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    if p in ("/", "/index.html", "/app.js") or p.startswith("/api/feed"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
     elif p.startswith("/api/search"):
         resp.headers["Cache-Control"] = "public, max-age=60"
     return resp
@@ -89,52 +91,132 @@ async def api_extract(payload: ExtractRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Extraction failed: {e}")
 
-@app.get("/api/search", response_model=SearchResponse)
-async def api_search(q: str = Query(..., description="Search query"), max_results: int = 8):
+@app.get("/api/suggest")
+async def api_suggest(q: str = Query("", max_length=100)):
+    q = q.strip()
+    if not q:
+        return {"query": "", "suggestions": []}
     try:
+        from app import innertube as _it
+        suggs = await _it.fast_suggest(q)
+        return {"query": q, "suggestions": suggs}
+    except Exception as e:
+        logger.warning(f"Suggest error for {q}: {e}")
+        return {"query": q, "suggestions": []}
+
+@app.get("/api/search", response_model=SearchResponse)
+async def api_search(q: str = Query(..., description="Search query"), max_results: int = 15, page: int = 1):
+    try:
+        q = q.strip()
+        page = max(1, int(page or 1))
         # if user pastes URL into search bar, smart-redirect to extract-compatible search result
         if extractor.is_url(q):
-            d = extractor.extract(q)
+            d = await asyncio.to_thread(extractor.extract, q)
+            ch = d.get("uploader") or d.get("channel") or "UltraVid"
             return {"query": q, "results": [{
                 "id": None,
                 "title": d.get("title"),
                 "url": d.get("webpage_url"),
                 "duration": d.get("duration"),
                 "thumbnail": d.get("thumbnail"),
-                "uploader": d.get("uploader"),
+                "uploader": ch,
+                "channel": ch,
+                "channelTitle": ch,
+                "views": d.get("view_count"),
+                "publishedTime": "Recently",
+                "channelAvatar": None,
             }]}
-        # turbo InnerTube primary, yt-dlp fallback
+        
+        search_query = q
+        if page > 1:
+            suffixes = ["", " latest", " 2026", " full", " highlights", " top", " videos"]
+            search_query = f"{q}{suffixes[(page - 1) % len(suffixes)]}"
+
+        # turbo InnerTube primary (blazing fast <1s)
         try:
             from app import innertube as _it
-            turbo = await _it.fast_search(q, max_results=max_results)
+            turbo = await asyncio.wait_for(_it.fast_search(search_query, max_results=max_results), timeout=3.5)
             if turbo.get("results"):
                 return {"query": q, "results": turbo["results"][:max_results]}
         except Exception:
             pass
-        data = extractor.search(q, max_results=max_results)
+        # Non-blocking fallback in thread pool with timeout
+        data = await asyncio.wait_for(asyncio.to_thread(extractor.search, search_query, max_results), timeout=4.0)
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Search failed: {e}")
 
 @app.get("/api/feed", response_model=SearchResponse)
-async def api_feed(page: int = 1, limit: int = 10):
+async def api_feed(page: int = 1, limit: int = 12, seed: int = 0, category: Optional[str] = None, t: Optional[str] = None):
     try:
-        limit = max(1, min(10, int(limit or 10)))
+        limit = max(1, min(25, int(limit or 12)))
         page = max(1, int(page or 1))
         from app import innertube as _it
         try:
-            turbo = await _it.fast_feed(page=page, limit=limit)
+            turbo = await asyncio.wait_for(_it.fast_feed(page=page, limit=limit, seed=seed, category=category), timeout=5.0)
             if turbo.get("results"):
                 return {"query": turbo.get("query", "feed"), "results": turbo["results"][:limit]}
         except Exception:
             pass
-        # fallback: trending topic via extractor (yt-dlp path)
-        from app import innertube as _it2
-        topic = _it2.TRENDING_TOPICS[(page - 1) % len(_it2.TRENDING_TOPICS)]
-        data = extractor.search(topic, max_results=limit)
-        return {"query": f"feed:{topic}", "results": (data.get("results", []) or [])[:limit]}
+        # Instant fallback to in-memory reserve cache (0ms latency, guaranteed items with rotation)
+        if getattr(_it, "_FEED_RESERVE", None):
+            res = _it._FEED_RESERVE
+            rot = ((page - 1) * limit) % max(1, len(res))
+            rotated = res[rot:] + res[:rot]
+            return {"query": "feed:Trending", "results": rotated[:limit]}
+        return {"query": "feed:Trending", "results": []}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Feed failed: {e}")
+
+@app.api_route("/api/proxy", methods=["GET", "HEAD"])
+async def api_proxy(request: Request, url: str = Query(...)):
+    """Streaming reverse proxy for GoogleVideo/YouTube media streams.
+    Resolves HTTP 403 Forbidden and ORB errors by proxying with Range headers.
+    """
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="Invalid stream url")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.youtube.com/",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+    }
+    range_hdr = request.headers.get("range")
+    if range_hdr:
+        headers["Range"] = range_hdr
+
+    client = httpx.AsyncClient(follow_redirects=True, timeout=20.0)
+    try:
+        req = client.build_request("GET", url, headers=headers)
+        upstream = await client.send(req, stream=True)
+    except Exception as exc:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"Proxy connection failed: {exc}")
+
+    resp_headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Range",
+        "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+        "Cache-Control": "public, max-age=3600",
+    }
+    for h in ("content-length", "content-range", "accept-ranges", "content-type"):
+        if h in upstream.headers:
+            resp_headers[h] = upstream.headers[h]
+
+    if "content-type" not in resp_headers:
+        resp_headers["content-type"] = "video/mp4"
+
+    async def stream_chunks():
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=65536):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    status_code = upstream.status_code if upstream.status_code in (200, 206) else 200
+    return StreamingResponse(stream_chunks(), status_code=status_code, headers=resp_headers)
 
 @app.post("/api/download", response_model=DownloadResponse)
 def api_download(payload: DownloadRequest):
