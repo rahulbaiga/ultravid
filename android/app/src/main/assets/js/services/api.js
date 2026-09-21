@@ -65,18 +65,24 @@ window.UltraVid = window.UltraVid || {};
         el.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17V7h10"/><path d="M17 17 7 7"/></svg>';
       } else if (name === "x") {
         el.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+      } else if (name === "play") {
+        el.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
       }
     });
   }
 
   async function fetchApi(endpoint, options = {}) {
-    const timeoutMs = options.timeout || 15000;
+    const timeoutMs = options.timeout || 25000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     
     // Support external signal chaining
     if (options.signal) {
-      options.signal.addEventListener("abort", () => controller.abort());
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
     }
 
     try {
@@ -130,13 +136,50 @@ window.UltraVid = window.UltraVid || {};
     return fetchApi(`/api/suggest?${qs.toString()}`, { signal, timeout: 5000 });
   }
 
-  async function extractStream(url, signal) {
-    return fetchApi('/api/extract', {
-      method: 'POST',
-      body: JSON.stringify({ url }),
-      signal,
-      timeout: 20000
-    });
+  async function extractStream(url, attempt = 1, signal = null) {
+    if (signal && signal.aborted) {
+      const err = new Error("AbortError");
+      err.name = "AbortError";
+      throw err;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+    if (signal) {
+      signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+
+    try {
+      const resp = await fetch(`/api/stream?url=${encodeURIComponent(url)}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (!resp.ok) {
+        // Fallback to POST /api/extract if GET /api/stream returned error
+        const fb = await fetch('/api/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+          signal: controller.signal
+        });
+        if (!fb.ok) {
+          const errData = await fb.json().catch(() => ({}));
+          throw new Error(errData.detail || `Stream HTTP ${resp.status}`);
+        }
+        return await fb.json();
+      }
+      return await resp.json();
+    } catch (err) {
+      clearTimeout(timeoutId);
+      const isAbort = err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('abort'));
+      if (isAbort && attempt < 2 && (!signal || !signal.aborted)) {
+        console.warn(`[StreamExtractor] Attempt ${attempt} timed out. Initiating retry...`);
+        await new Promise(res => setTimeout(res, 600));
+        return extractStream(url, attempt + 1, signal);
+      }
+      throw err;
+    }
   }
 
   async function startDownload(url, quality = '720', audioOnly = false) {

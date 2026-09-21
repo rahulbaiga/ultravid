@@ -66,10 +66,14 @@ window.UltraVid = window.UltraVid || {};
               shareMsg.classList.remove("hidden");
               setTimeout(() => shareMsg.classList.add("hidden"), 2500);
             } else {
-              alert("Link copied: " + vid.url);
+              const toast = document.createElement("div");
+              toast.textContent = "Link copied to clipboard";
+              toast.style.cssText = "position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.5);";
+              document.body.appendChild(toast);
+              setTimeout(() => toast.remove(), 2500);
             }
           } catch (e) {
-            prompt("Copy link:", vid.url);
+            console.warn("Clipboard write failed:", e);
           }
         }
       };

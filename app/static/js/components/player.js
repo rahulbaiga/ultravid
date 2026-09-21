@@ -1,5 +1,6 @@
 /**
  * UltraVid Video Player & Downloads Component
+ * Tokenized Invalidation Lifecycle & In-DOM Error State Machine
  */
 window.UltraVid = window.UltraVid || {};
 
@@ -9,6 +10,11 @@ window.UltraVid = window.UltraVid || {};
   let homeView = null;
   let watchView = null;
   let videoEl = null;
+  let playerSpinner = null;
+  let playerBigPlayBtn = null;
+  let playerErrorOverlay = null;
+  let playerRetryBtn = null;
+  let playerErrorMsg = null;
   let backBtn = null;
   let wTitle = null;
   let wChannel = null;
@@ -37,10 +43,19 @@ window.UltraVid = window.UltraVid || {};
   let likeN = 0;
   let downloadPollTimer = null;
 
+  // Tokenized Invalidation Pattern (Request Generation Counter)
+  let currentPlaybackToken = 0;
+  let lastFailedItem = null;
+
   function init(callbacks = {}) {
     homeView = document.getElementById("tab-home") || document.getElementById("homeView");
     watchView = document.getElementById("watchView");
-    videoEl = document.getElementById("videoEl");
+    videoEl = document.getElementById("mainVideo") || document.getElementById("videoEl");
+    playerSpinner = document.getElementById("playerSpinner");
+    playerBigPlayBtn = document.getElementById("playerBigPlayBtn");
+    playerErrorOverlay = document.getElementById("playerErrorOverlay");
+    playerRetryBtn = document.getElementById("playerRetryBtn");
+    playerErrorMsg = document.getElementById("playerErrorMsg");
     backBtn = document.getElementById("backBtn") || document.getElementById("watchBackBtn");
     wTitle = document.getElementById("wTitle");
     wChannel = document.getElementById("wChannel");
@@ -60,6 +75,53 @@ window.UltraVid = window.UltraVid || {};
     dlList = document.getElementById("dlList");
     dlStatus = document.getElementById("dlStatus");
     mp3Btn = document.getElementById("mp3Btn");
+
+    if (videoEl) {
+      videoEl.addEventListener("waiting", () => {
+        if (playerSpinner) playerSpinner.classList.remove("hidden");
+      });
+      videoEl.addEventListener("playing", () => {
+        if (playerSpinner) playerSpinner.classList.add("hidden");
+        if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+        hidePlayerErrorState();
+      });
+      videoEl.addEventListener("canplay", () => {
+        if (playerSpinner) playerSpinner.classList.add("hidden");
+      });
+      videoEl.addEventListener("error", () => {
+        if (playerSpinner) playerSpinner.classList.add("hidden");
+      });
+    }
+
+    if (playerBigPlayBtn) {
+      playerBigPlayBtn.onclick = () => {
+        if (videoEl) {
+          const p = videoEl.play();
+          if (p !== undefined) {
+            p.then(() => {
+              if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+              if (playerSpinner) playerSpinner.classList.add("hidden");
+              hidePlayerErrorState();
+            }).catch(err => {
+              console.warn("Manual play attempt failed:", err);
+            });
+          }
+        }
+      };
+    }
+
+    if (playerRetryBtn) {
+      playerRetryBtn.onclick = (e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        if (lastFailedItem) {
+          hidePlayerErrorState();
+          loadAndPlay(lastFailedItem);
+        }
+      };
+    }
 
     if (backBtn) {
       backBtn.onclick = (e) => {
@@ -122,7 +184,8 @@ window.UltraVid = window.UltraVid || {};
         const ct = videoEl.currentTime;
         videoEl.src = qualitySel.value;
         videoEl.currentTime = ct;
-        videoEl.play().catch(() => {});
+        const p = videoEl.play();
+        if (p !== undefined) p.catch(() => {});
       };
     }
 
@@ -140,24 +203,16 @@ window.UltraVid = window.UltraVid || {};
     }
   }
 
-  async function loadAndPlay(url, lastQuery = "") {
-    try {
-      const d = await window.UltraVid.api.extractStream(url);
-      if (!d || d.detail) throw new Error(d ? d.detail : "Extraction failed");
+  function showPlayerErrorState(item, msg = "An error occurred. Please try again.") {
+    lastFailedItem = item;
+    if (playerSpinner) playerSpinner.classList.add("hidden");
+    if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+    if (playerErrorMsg) playerErrorMsg.textContent = msg;
+    if (playerErrorOverlay) playerErrorOverlay.classList.remove("hidden");
+  }
 
-      let rel = [];
-      try {
-        const q = (lastQuery && !isUrl(lastQuery)) ? lastQuery : (d.title || "").split(" ").slice(0, 3).join(" ");
-        if (q) {
-          const rr = await window.UltraVid.api.fetchSearch(q, { maxResults: 8 });
-          rel = (rr && rr.results) || [];
-        }
-      } catch (e) {}
-
-      openWatch(url, d, rel.filter(x => x.url !== url));
-    } catch (e) {
-      alert("Extract failed: " + e.message);
-    }
+  function hidePlayerErrorState() {
+    if (playerErrorOverlay) playerErrorOverlay.classList.add("hidden");
   }
 
   function extractVideoId(url, d) {
@@ -172,37 +227,125 @@ window.UltraVid = window.UltraVid || {};
     return (d && d.id) || "video";
   }
 
-  function openWatch(url, d, rel) {
-    currentData = d;
+  function renderRelatedVideos(relList) {
+    if (!relatedEl) return;
+    relatedEl.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    (relList || []).forEach(it => {
+      const div = document.createElement("div");
+      div.className = "rel";
+      div.innerHTML = `
+        <img src="${it.thumbnail || ''}" loading="lazy"/>
+        <div style="flex:1;min-width:0">
+          <div class="tt" style="min-height:0">${(it.title || "").slice(0, 100)}</div>
+          <div class="ch">${it.uploader || it.channel || it.channelTitle || ""}</div>
+        </div>
+      `;
+      div.onclick = () => loadAndPlay(it);
+      fragment.appendChild(div);
+    });
+    relatedEl.appendChild(fragment);
+  }
+
+  function openWatch(url, preview = null, rel = []) {
     currentUrl = url;
     isWatchOpen = true;
 
-    const vidId = extractVideoId(url, d);
+    const vidId = extractVideoId(url, preview);
     try {
       if (!history.state || history.state.view !== "watch" || history.state.id !== vidId) {
         history.pushState({ view: "watch", id: vidId }, "", "#watch/" + vidId);
       }
     } catch (e) {}
 
+    // Hide active tabs and display watch view
     document.querySelectorAll('.tab-view').forEach(t => {
       t.classList.remove("active-tab");
       t.classList.add("hidden");
     });
     if (watchView) watchView.classList.remove("hidden");
 
+    // Reset video player and set state to LOADING
+    if (videoEl) {
+      videoEl.pause();
+      videoEl.removeAttribute("src");
+      videoEl.load();
+    }
+    if (playerSpinner) playerSpinner.classList.remove("hidden");
+    if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+    hidePlayerErrorState();
+
+    // Populate initial preview metadata if available
+    const title = preview ? (preview.title || "") : "";
+    if (wTitle) wTitle.textContent = title || "Loading video…";
+
+    const ch = preview ? (preview.channelTitle || preview.uploader || preview.channel || "") : "";
+    if (wChannel) wChannel.textContent = ch || "Loading…";
+    if (wAvatar) {
+      const initial = ((ch || "U").trim().charAt(0) || "U").toUpperCase();
+      wAvatar.textContent = initial;
+    }
+
+    const views = preview ? (preview.views ? fmtViews(preview.views) : (preview.view_count ? fmtViews(preview.view_count) : "")) : "";
+    const dur = preview ? (preview.duration_string || (preview.duration ? fmtDur(preview.duration) : "")) : "";
+    if (wMeta) wMeta.textContent = [views, dur].filter(Boolean).join(" • ") || "Loading details…";
+
+    // Reset interactive controls
+    liked = false;
+    disliked = false;
+    likeN = preview && preview.like_count ? (parseInt(preview.like_count) || 0) : 0;
+    if (likeCount) likeCount.textContent = likeN > 0 ? String(likeN) : "0";
+    if (likeBtn) likeBtn.classList.remove("active");
+    if (dislikeBtn) dislikeBtn.classList.remove("active");
+
+    if (qualitySel) {
+      qualitySel.innerHTML = "<option>Loading qualities…</option>";
+    }
+
+    renderRelatedVideos(rel);
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    refreshIcons();
+  }
+
+  async function hydrateWatchDetails(url, d, lastQuery = "", thisToken = null) {
+    if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+    if (!isWatchOpen || currentUrl !== url) return;
+
+    currentData = d;
+
     const playables = (d.playable_streams && d.playable_streams.length ? d.playable_streams : (d.progressive_streams || []));
     const rawUrl = d.default_play_url || (playables[0] && playables[0].url) || "";
     const defUrl = rawUrl ? (rawUrl.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : "";
 
-    if (videoEl) {
+    if (videoEl && defUrl) {
       videoEl.src = defUrl;
-      videoEl.play().catch(() => {});
+      const playPromise = videoEl.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+          if (playerSpinner) playerSpinner.classList.add("hidden");
+          if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+          hidePlayerErrorState();
+        }).catch(err => {
+          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+          console.warn("Autoplay blocked or deferred by browser policy:", err);
+          if (playerSpinner) playerSpinner.classList.add("hidden");
+          if (playerBigPlayBtn) playerBigPlayBtn.classList.remove("hidden");
+        });
+      }
+    } else {
+      if (playerSpinner) playerSpinner.classList.add("hidden");
+      if (!defUrl) {
+        showPlayerErrorState(currentData || { url }, "No playable stream found for this video.");
+        return;
+      }
     }
 
     if (wTitle) wTitle.textContent = d.title || "Video";
     const ch = d.channel || d.uploader || "Unknown";
     if (wChannel) wChannel.textContent = ch;
-    if (wAvatar) wAvatar.textContent = (ch[0] || "U").toUpperCase();
+    if (wAvatar) wAvatar.textContent = ((ch.trim().charAt(0) || "U")).toUpperCase();
 
     const views = fmtViews(d.view_count);
     const dur = d.duration_string || fmtDur(d.duration);
@@ -211,7 +354,7 @@ window.UltraVid = window.UltraVid || {};
     liked = false;
     disliked = false;
     likeN = parseInt(d.like_count) || 0;
-    if (likeCount) likeCount.textContent = likeN > 0 ? likeN : "0";
+    if (likeCount) likeCount.textContent = likeN > 0 ? String(likeN) : "0";
     if (likeBtn) likeBtn.classList.remove("active");
     if (dislikeBtn) dislikeBtn.classList.remove("active");
 
@@ -233,27 +376,65 @@ window.UltraVid = window.UltraVid || {};
       }
     }
 
-    if (relatedEl) {
-      relatedEl.innerHTML = "";
-      const fragment = document.createDocumentFragment();
-      (rel || []).forEach(it => {
-        const div = document.createElement("div");
-        div.className = "rel";
-        div.innerHTML = `
-          <img src="${it.thumbnail || ''}" loading="lazy"/>
-          <div style="flex:1;min-width:0">
-            <div class="tt" style="min-height:0">${(it.title || "").slice(0, 100)}</div>
-            <div class="ch">${it.uploader || it.channel || ""}</div>
-          </div>
-        `;
-        div.onclick = () => loadAndPlay(it.url);
-        fragment.appendChild(div);
-      });
-      relatedEl.appendChild(fragment);
+    let rel = [];
+    try {
+      const q = (lastQuery && !isUrl(lastQuery)) ? lastQuery : (d.title || "").split(" ").slice(0, 3).join(" ");
+      if (q) {
+        const rr = await window.UltraVid.api.fetchSearch(q, { maxResults: 8 });
+        rel = (rr && rr.results) || [];
+      }
+    } catch (e) {}
+
+    if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+    if (isWatchOpen && currentUrl === url) {
+      renderRelatedVideos(rel.filter(x => x.url !== url));
     }
 
-    window.scrollTo({ top: 0, behavior: "smooth" });
     refreshIcons();
+  }
+
+  async function loadAndPlay(itemOrUrl, lastQuery = "") {
+    let url = "";
+    let preview = null;
+
+    if (typeof itemOrUrl === "object" && itemOrUrl !== null) {
+      preview = itemOrUrl;
+      url = itemOrUrl.url || "";
+    } else if (typeof itemOrUrl === "string") {
+      url = itemOrUrl;
+      preview = { url: itemOrUrl };
+    }
+
+    if (!url) return;
+
+    // Tokenized Invalidation: Increment request counter
+    const thisToken = ++currentPlaybackToken;
+    lastFailedItem = preview;
+
+    // Instant watch view transition (0ms UI latency)
+    openWatch(url, preview, []);
+
+    try {
+      const d = await window.UltraVid.api.extractStream(url);
+
+      // Tokenized Invalidation: Stale request check
+      if (thisToken !== currentPlaybackToken || !isWatchOpen || currentUrl !== url) {
+        return; // Silently drop superseded response
+      }
+
+      if (!d || d.detail) throw new Error(d ? d.detail : "Extraction failed");
+
+      await hydrateWatchDetails(url, d, lastQuery, thisToken);
+    } catch (err) {
+      // Ignore stale requests
+      if (thisToken !== currentPlaybackToken) return;
+
+      const isAbort = err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('abort'));
+      if (isAbort) return; // Silently drop user-initiated aborts
+
+      console.error('[PlayerEngine] Stream playback failed:', err);
+      showPlayerErrorState(preview, "Can't play this video • Tap to retry");
+    }
   }
 
   function pause() {
@@ -261,13 +442,18 @@ window.UltraVid = window.UltraVid || {};
   }
 
   function teardownWatchUI() {
+    currentPlaybackToken++; // Invalidate any inflight requests immediately
     pause();
-    const player = document.getElementById("videoEl") || document.getElementById("mainVideo");
+    const player = document.getElementById("mainVideo") || document.getElementById("videoEl") || videoEl;
     if (player) {
       player.pause();
       player.removeAttribute("src");
       player.load();
     }
+    if (playerSpinner) playerSpinner.classList.add("hidden");
+    if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+    hidePlayerErrorState();
+
     const watchViewEl = document.getElementById("watchView") || watchView;
     if (watchViewEl) {
       watchViewEl.classList.add("hidden");
@@ -399,6 +585,7 @@ window.UltraVid = window.UltraVid || {};
     init,
     loadAndPlay,
     openWatch,
+    hydrateWatchDetails,
     pause,
     showHomeView,
     closeWatch,
@@ -408,6 +595,8 @@ window.UltraVid = window.UltraVid || {};
     closeDownloads,
     startDownload,
     getCurrentUrl,
-    setCurrentUrl
+    setCurrentUrl,
+    showPlayerErrorState,
+    hidePlayerErrorState
   };
 })();

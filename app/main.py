@@ -52,6 +52,7 @@ def health():
     return {"status": "ok", "service": "ultravid-engine"}
 
 @app.post("/api/extract", response_model=ExtractResponse)
+@app.post("/api/stream", response_model=ExtractResponse)
 async def api_extract(payload: ExtractRequest):
     try:
         s = (payload.url or "").strip()
@@ -91,6 +92,10 @@ async def api_extract(payload: ExtractRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Extraction failed: {e}")
 
+@app.get("/api/stream", response_model=ExtractResponse)
+async def api_stream_get(url: str = Query(..., description="Video URL to stream")):
+    return await api_extract(ExtractRequest(url=url))
+
 @app.get("/api/suggest")
 async def api_suggest(q: str = Query("", max_length=100)):
     q = q.strip()
@@ -125,6 +130,7 @@ async def api_search(q: str = Query(..., description="Search query"), max_result
                 "views": d.get("view_count"),
                 "publishedTime": "Recently",
                 "channelAvatar": None,
+                "isLive": False,
             }]}
         
         search_query = q

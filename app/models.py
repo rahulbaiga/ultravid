@@ -53,6 +53,7 @@ class SearchResultItem(BaseModel):
     views: Optional[Any] = None
     publishedTime: Optional[str] = None
     channelAvatar: Optional[str] = None
+    isLive: Optional[bool] = False
 
     class Config:
         extra = "allow"

@@ -1,6 +1,7 @@
 /**
  * UltraVid Multi-Container Infinite Scroll Feed Engine
  * Industry-Standard Two-Tier Persistent Container Architecture
+ * Resilient Startup Hydration & Viewport Watchdog
  */
 window.UltraVid = window.UltraVid || {};
 
@@ -74,6 +75,33 @@ window.UltraVid = window.UltraVid || {};
     return document.getElementById('grid-search') || document.getElementById('grid-all');
   }
 
+  function showFeedError(key) {
+    const state = feedStates[key];
+    if (!state) return;
+    const targetEl = document.getElementById(state.elId);
+    if (!targetEl) return;
+    targetEl.innerHTML = `
+      <div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#888;">
+        <div style="font-size:32px;margin-bottom:12px">⚠️</div>
+        <div style="font-size:15px;color:#fff;font-weight:600;margin-bottom:6px">Couldn't load feed</div>
+        <div style="font-size:13px;margin-bottom:16px">Check your network connection and try again.</div>
+        <button type="button" class="btn" style="padding:8px 20px;font-size:13px" onclick="window.UltraVid.feed.retryCategory('${key}')">↻ Tap to retry</button>
+      </div>
+    `;
+    const sentinel = getActiveSentinel();
+    if (sentinel && isKeyActive(key)) sentinel.textContent = '';
+  }
+
+  async function retryCategory(key) {
+    const state = feedStates[key];
+    if (!state) return;
+    state.initialized = false;
+    state.isFetching = false;
+    state.page = 1;
+    state.hasMore = true;
+    await ensureCategoryLoaded(key);
+  }
+
   function setupScrollListeners() {
     // 2-card lookahead observer
     if ('IntersectionObserver' in window) {
@@ -83,7 +111,11 @@ window.UltraVid = window.UltraVid || {};
             const activeKey = getActiveFeedKey();
             if (!activeKey) return;
             const state = feedStates[activeKey];
-            if (state && state.hasMore) {
+            if (state && state.initialized && state.hasMore) {
+              const targetEl = document.getElementById(state.elId);
+              const realCards = targetEl ? targetEl.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+              if (realCards === 0) return;
+
               if (state.queue.length > 0) {
                 renderNext(activeKey, 2);
               } else if (!state.isFetching) {
@@ -103,13 +135,17 @@ window.UltraVid = window.UltraVid || {};
         const activeKey = getActiveFeedKey();
         if (activeKey) {
           const state = feedStates[activeKey];
-          if (state && state.hasMore) {
-            const scrollDist = document.documentElement.scrollHeight - (window.innerHeight + window.scrollY);
-            if (scrollDist <= 600) {
-              if (state.queue.length > 0) {
-                renderNext(activeKey, 2);
-              } else if (!state.isFetching) {
-                fetchBatch(activeKey, state.page);
+          if (state && state.initialized && state.hasMore) {
+            const targetEl = document.getElementById(state.elId);
+            const realCards = targetEl ? targetEl.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+            if (realCards > 0) {
+              const scrollDist = document.documentElement.scrollHeight - (window.innerHeight + window.scrollY);
+              if (scrollDist <= 600) {
+                if (state.queue.length > 0) {
+                  renderNext(activeKey, 2);
+                } else if (!state.isFetching) {
+                  fetchBatch(activeKey, state.page);
+                }
               }
             }
           }
@@ -134,12 +170,17 @@ window.UltraVid = window.UltraVid || {};
             const key = getActiveFeedKey();
             if (!key) return;
             const state = feedStates[key];
-            if (state && state.hasMore) {
-              if (state.queue.length > 0) {
-                renderNext(key, 2);
-              } else if (!state.isFetching) {
-                fetchBatch(key, state.page);
-              }
+            if (!state || !state.initialized || !state.hasMore) return;
+
+            // Coordination check: Ensure container has real video cards and is not empty/skeletons
+            const targetEl = document.getElementById(state.elId);
+            const realCards = targetEl ? targetEl.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+            if (realCards === 0) return;
+
+            if (state.queue.length > 0) {
+              renderNext(key, 2);
+            } else if (!state.isFetching) {
+              fetchBatch(key, state.page);
             }
           }
         });
@@ -157,13 +198,23 @@ window.UltraVid = window.UltraVid || {};
     const targetEl = document.getElementById(state.elId);
     if (!targetEl) return;
 
-    const cards = targetEl.querySelectorAll(".card");
+    const cards = targetEl.querySelectorAll(".card:not(.skeleton-card)");
     if (cards.length > 1) {
       const target = cards[cards.length - 2];
       if (target && cardObserver) {
         cardObserver.observe(target);
       }
     }
+  }
+
+  function prefetchThumbnails(items) {
+    if (!Array.isArray(items)) return;
+    items.forEach(item => {
+      if (item && item.thumbnail) {
+        const img = new Image();
+        img.src = item.thumbnail;
+      }
+    });
   }
 
   async function fetchBatch(key = getActiveFeedKey(), pageToFetch = null) {
@@ -174,7 +225,16 @@ window.UltraVid = window.UltraVid || {};
     state.isFetching = true;
 
     clearTimeout(safetyTimers[key]);
-    safetyTimers[key] = setTimeout(() => { state.isFetching = false; }, 6000);
+    safetyTimers[key] = setTimeout(() => { state.isFetching = false; }, 8000);
+
+    // Watchdog timer for initial batch
+    const watchdog = setTimeout(() => {
+      if (state.isFetching && state.queue.length === 0 && targetPage === 1) {
+        console.warn(`[FeedEngine] Initial fetch timed out for ${key}. Releasing lock.`);
+        state.isFetching = false;
+        showFeedError(key);
+      }
+    }, 8000);
 
     const sentinel = getActiveSentinel();
     if (sentinel && state.queue.length === 0 && isKeyActive(key)) {
@@ -190,6 +250,7 @@ window.UltraVid = window.UltraVid || {};
         seed: state.seed,
         category: categoryParam
       });
+      clearTimeout(watchdog);
       const rawItems = (j && j.results) || [];
 
       let items = rawItems.filter(it => it.id && !state.seenIds.has(it.id));
@@ -200,6 +261,7 @@ window.UltraVid = window.UltraVid || {};
       items.forEach(it => { if (it.id) state.seenIds.add(it.id); });
 
       if (items.length > 0) {
+        prefetchThumbnails(items);
         state.emptyCount = 0;
         state.queue.push(...items);
         state.page = targetPage + 1;
@@ -221,8 +283,14 @@ window.UltraVid = window.UltraVid || {};
         }
       }
     } catch (e) {
+      clearTimeout(watchdog);
       state.emptyCount = (state.emptyCount || 0) + 1;
       state.page = targetPage + 1;
+      if (targetPage === 1 && state.queue.length === 0) {
+        state.isFetching = false;
+        showFeedError(key);
+        return;
+      }
       if (state.emptyCount >= 5) {
         state.hasMore = false;
         if (sentinel && isKeyActive(key)) sentinel.textContent = 'No more videos';
@@ -232,6 +300,7 @@ window.UltraVid = window.UltraVid || {};
       }
     } finally {
       state.isFetching = false;
+      clearTimeout(watchdog);
       clearTimeout(safetyTimers[key]);
       if (state.queue.length > 0 && sentinel && state.hasMore && isKeyActive(key)) {
         sentinel.textContent = '';
@@ -281,28 +350,38 @@ window.UltraVid = window.UltraVid || {};
     const targetEl = document.getElementById(state.elId);
     if (!targetEl) return;
 
-    // Render skeleton inside this category container ONLY
-    if (window.UltraVid.card) {
-      window.UltraVid.card.renderSkeleton(targetEl, 6);
+    // Render skeleton inside this category container if not already present
+    if (!targetEl.querySelector('.skeleton-card') && !targetEl.querySelector('.card')) {
+      if (window.UltraVid.card) {
+        window.UltraVid.card.renderSkeleton(targetEl, 6);
+      }
     }
 
     await fetchBatch(key, 1);
 
-    targetEl.innerHTML = '';
-    renderNext(key, 6);
-    state.initialized = true;
+    if (state.queue.length > 0) {
+      // Clear skeletons and inject real cards
+      targetEl.innerHTML = '';
+      renderNext(key, 6);
+      state.initialized = true;
 
-    // Proactively pre-fetch page 2
-    if (state.hasMore && !state.isFetching) {
-      fetchBatch(key, 2);
+      // Proactively pre-fetch page 2
+      if (state.hasMore && !state.isFetching) {
+        fetchBatch(key, 2);
+      }
+
+      setupSentinelObserver();
     }
-
-    setupSentinelObserver();
   }
 
   async function switchCategory(targetCategory) {
     if (targetCategory === currentCategory && isKeyActive(targetCategory)) {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      const state = feedStates[targetCategory];
+      if (state && !state.initialized) {
+        await ensureCategoryLoaded(targetCategory);
+      } else {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       return;
     }
 
@@ -354,7 +433,21 @@ window.UltraVid = window.UltraVid || {};
 
   async function switchTab(targetTab) {
     if (targetTab === currentTab) {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (targetTab === 'home') {
+        const state = feedStates[currentCategory];
+        if (state && !state.initialized) {
+          await ensureCategoryLoaded(currentCategory);
+        } else {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      } else if (targetTab === 'trending') {
+        const state = feedStates['trending'];
+        if (state && !state.initialized) {
+          await ensureCategoryLoaded('trending');
+        } else {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
       return;
     }
 
@@ -424,6 +517,8 @@ window.UltraVid = window.UltraVid || {};
       feedMode = false;
       if (cardObserver) cardObserver.disconnect();
       if (feedObserver) feedObserver.disconnect();
+      const sentinel = getActiveSentinel();
+      if (sentinel) sentinel.textContent = '';
       window.scrollTo(0, tabScrollY['library'] || 0);
       renderLibrary();
     }
@@ -490,8 +585,10 @@ window.UltraVid = window.UltraVid || {};
   }
 
   async function initFeed(isFresh = true) {
+    currentTab = 'home';
+    currentCategory = 'all';
+    const state = feedStates['all'];
     if (isFresh) {
-      const state = feedStates['all'];
       state.page = 1;
       state.queue = [];
       state.seenIds.clear();
@@ -501,8 +598,26 @@ window.UltraVid = window.UltraVid || {};
       state.seed = Math.floor(Math.random() * 1000);
       state.emptyCount = 0;
     }
-    await switchTab('home');
-    await switchCategory('all');
+
+    // Ensure Tier 1 tab-home and Tier 2 grid-all are active and visible in DOM
+    document.querySelectorAll('.tab-view').forEach(t => {
+      t.classList.remove('active-tab');
+      t.classList.add('hidden');
+    });
+    const homeEl = document.getElementById('tab-home');
+    if (homeEl) {
+      homeEl.classList.remove('hidden');
+      homeEl.classList.add('active-tab');
+    }
+
+    const allGrid = document.getElementById('grid-all');
+    if (allGrid) {
+      allGrid.classList.remove('hidden');
+      allGrid.classList.add('active');
+    }
+
+    // Boot hydration: load 'all' category immediately
+    await ensureCategoryLoaded('all');
   }
 
   function setFeedMode(mode) {
@@ -531,6 +646,15 @@ window.UltraVid = window.UltraVid || {};
     return feedStates;
   }
 
+  // Global Inspector Utility
+  window.feedStates = feedStates;
+  window.inspectFeedMetadata = (key = 'all') => {
+    const state = feedStates[key];
+    const q = (state && state.queue) || [];
+    console.table(q);
+    return q;
+  };
+
   window.UltraVid.feed = {
     init,
     initFeed,
@@ -546,6 +670,10 @@ window.UltraVid = window.UltraVid || {};
     getGrid,
     getCurrentCategory,
     getCurrentTab,
-    getFeedStates
+    getFeedStates,
+    prefetchThumbnails,
+    inspectFeedMetadata: window.inspectFeedMetadata,
+    showFeedError,
+    retryCategory
   };
 })();

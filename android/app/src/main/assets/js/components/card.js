@@ -10,11 +10,12 @@ window.UltraVid = window.UltraVid || {};
     const div = document.createElement("div");
     div.className = "card";
     if (typeof callbacks.onPlay === "function") {
-      div.onclick = () => callbacks.onPlay(it.url);
+      div.onclick = () => callbacks.onPlay(it);
     }
 
-    const dur = fmtDur(it.duration);
-    const durBadge = dur ? `<span class="dur-badge">${dur}</span>` : "";
+    const isLive = Boolean(it.isLive || it.duration === "LIVE" || (typeof it.duration === "string" && it.duration.toUpperCase() === "LIVE"));
+    const dur = isLive ? "LIVE" : fmtDur(it.duration);
+    const durBadge = dur ? `<span class="dur-badge ${isLive ? 'badge-live' : ''}">${dur}</span>` : "";
     const initial = ((it.channelTitle || it.uploader || it.channel || "U").trim().charAt(0) || "U").toUpperCase();
     const chTitle = escapeHtml(it.channelTitle || it.uploader || it.channel || "UltraVid");
     const views = escapeHtml(it.views || "100K+ views");
@@ -58,16 +59,14 @@ window.UltraVid = window.UltraVid || {};
     const fragment = document.createDocumentFragment();
     for (let i = 0; i < count; i++) {
       const d = document.createElement('div');
-      d.className = 'card';
+      d.className = 'skeleton-card';
       d.innerHTML = `
-        <div class="thumb-wrap">
-          <div class="skel" style="width:100%;height:100%;border-radius:0;"></div>
-        </div>
-        <div class="card-body">
-          <div class="skel card-avatar"></div>
-          <div class="card-meta">
-            <div class="skel" style="height:14px;margin-bottom:8px;border-radius:4px;width:90%"></div>
-            <div class="skel" style="height:12px;width:60%;border-radius:4px"></div>
+        <div class="skeleton-thumb"></div>
+        <div class="skeleton-meta">
+          <div class="skeleton-avatar"></div>
+          <div class="skeleton-lines">
+            <div class="skeleton-line long"></div>
+            <div class="skeleton-line short"></div>
           </div>
         </div>
       `;

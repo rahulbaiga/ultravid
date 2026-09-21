@@ -137,9 +137,26 @@ def _parse_search_json(data: Dict[str, Any], max_results: int) -> List[Dict[str,
                 continue
             th = vr.get("thumbnail", {}).get("thumbnails", [])
             ch = _text(vr.get("ownerText")) or _text(vr.get("shortBylineText")) or "UltraVid"
+            if ch:
+                ch = ch.split("\n")[0].split("\r")[0].strip()
+                if " • " in ch:
+                    ch = ch.split(" • ")[0].strip()
+                ch = ch.rstrip("`").strip() or "UltraVid"
+
             views = _text(vr.get("shortViewCountText")) or _text(vr.get("viewCountText")) or "100K+ views"
             pub = _text(vr.get("publishedTimeText")) or "Recently"
             dur = _text(vr.get("lengthText"))
+
+            is_live = False
+            badges = vr.get("badges") or []
+            for b in badges:
+                mr = b.get("metadataBadgeRenderer", {})
+                if mr.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW" or "LIVE" in (_text(mr.get("label")) or "").upper():
+                    is_live = True
+                    break
+            if not dur and is_live:
+                dur = "LIVE"
+
             ch_thumbs = vr.get("channelThumbnailSupportedRenderers", {}).get("channelThumbnailWithLinkRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
             avatar = _thumb(ch_thumbs) if ch_thumbs else None
 
@@ -155,6 +172,7 @@ def _parse_search_json(data: Dict[str, Any], max_results: int) -> List[Dict[str,
                 "views": views,
                 "publishedTime": pub,
                 "channelAvatar": avatar,
+                "isLive": is_live,
             })
     return out
 
