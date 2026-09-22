@@ -73,6 +73,14 @@ async def api_feed(
 
         # 4. Fallback to category-isolated reserve cache (0ms latency, guaranteed items with rotation)
         res = get_category_reserve(norm_cat)
+        if not res:
+            res = get_category_reserve("all")
+        if not res:
+            from app.services.innertube import _CATEGORY_RESERVES
+            for k, v in _CATEGORY_RESERVES.items():
+                if v:
+                    res.extend(v[:4])
+
         if res:
             rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(res))
             rotated = res[rot:] + res[:rot]
@@ -89,9 +97,19 @@ async def api_feed(
 
         return {"query": f"feed:{norm_cat}", "results": []}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Feed failed: {e}")
+        logger.error(f"[FeedRouter] Unhandled feed exception for [{category}]: {e}")
+        # Bulletproof fallback: Never raise 400/500 to prevent frontend error banners
+        try:
+            res = get_category_reserve(category or "all") or get_category_reserve("all")
+            if res:
+                rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(res))
+                rotated = res[rot:] + res[:rot]
+                return {"query": f"feed:{category or 'all'}", "results": rotated[:limit]}
+        except Exception:
+            pass
+        return {"query": f"feed:{category or 'all'}", "results": []}
 
 
 @router.get("/trending", response_model=SearchResponse)
-async def api_trending(page: int = 1, limit: int = 12):
-    return await api_feed(page=page, limit=limit, category="trending")
+async def api_trending(page: int = 1, limit: int = 12, refresh: bool = False, seed: int = 0):
+    return await api_feed(page=page, limit=limit, category="trending", refresh=refresh, seed=seed)

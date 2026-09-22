@@ -234,7 +234,11 @@
           await window.FeedComponent.optimisticRefresh(activeCat);
         }
       } catch (err) {
-        console.warn('[PTR] Refresh failed:', err);
+        if (err && (err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('abort')))) {
+          // Clean abort - do not log or treat as network failure
+        } else {
+          console.warn('[PTR] Refresh failed:', err);
+        }
       } finally {
         if (spinner) {
           spinner.style.top = '-50px';

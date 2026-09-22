@@ -94,41 +94,75 @@ window.UltraVid = window.UltraVid || {};
     return document.getElementById('grid-search') || document.getElementById('grid-all');
   }
 
-  function showFeedError(key) {
-    const state = feedStates[key];
-    if (!state) return;
-    const targetEl = document.getElementById(state.elId);
-    if (!targetEl) return;
-    targetEl.innerHTML = `
-      <div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#888;">
-        <div style="font-size:32px;margin-bottom:12px">⚠️</div>
-        <div style="font-size:15px;color:#fff;font-weight:600;margin-bottom:6px">Couldn't load feed</div>
-        <div style="font-size:13px;margin-bottom:16px">Check your network connection and try again.</div>
-        <button type="button" class="btn" style="padding:8px 20px;font-size:13px" onclick="window.UltraVid.feed.retryCategory('${key}')">↻ Tap to retry</button>
-      </div>
+  function clearErrorBanners(container) {
+    if (!container) return;
+    const banners = container.querySelectorAll('.feed-error-banner, .error-card, .error-container, [data-error-banner="true"]');
+    banners.forEach(b => b.remove());
+  }
+
+  function showFeedError(containerOrKey, key) {
+    const targetKey = (typeof containerOrKey === 'string') ? containerOrKey : (key || getActiveFeedKey() || 'all');
+    const state = targetKey ? feedStates[targetKey] : null;
+    const container = (containerOrKey && containerOrKey.nodeType) ? containerOrKey : (state ? document.getElementById(state.elId) : null);
+    if (!container) return;
+
+    // Suppress error banner if existing cards are already visible in this container
+    const realCards = container.querySelectorAll('.card:not(.skeleton-card)').length;
+    if (realCards > 0) {
+      clearErrorBanners(container);
+      return;
+    }
+
+    clearErrorBanners(container);
+
+    const banner = document.createElement('div');
+    banner.className = 'feed-error-banner error-card error-container';
+    banner.setAttribute('data-error-banner', 'true');
+    banner.style.cssText = 'grid-column:1/-1;text-align:center;padding:48px 16px;color:#888;width:100%;';
+    banner.innerHTML = `
+      <div style="font-size:32px;margin-bottom:12px">⚠️</div>
+      <div style="font-size:15px;color:#fff;font-weight:600;margin-bottom:6px">Couldn't load feed</div>
+      <div style="font-size:13px;margin-bottom:16px">Check your network connection and try again.</div>
+      <button type="button" class="btn" style="padding:8px 20px;font-size:13px" onclick="window.UltraVid.feed.retryCategory('${targetKey || 'all'}')">↻ Tap to retry</button>
     `;
+    container.innerHTML = '';
+    container.appendChild(banner);
+
     const sentinel = getActiveSentinel();
-    if (sentinel && isKeyActive(key)) sentinel.textContent = '';
+    if (sentinel && isKeyActive(targetKey)) sentinel.textContent = '';
   }
 
   async function retryCategory(key) {
-    const state = feedStates[key];
+    const targetKey = key || getActiveFeedKey() || 'all';
+    const state = feedStates[targetKey];
     if (state && state.abortController) {
       try { state.abortController.abort(); } catch (e) {}
       state.abortController = null;
     }
-    if (activeAbortControllers[key]) {
-      try { activeAbortControllers[key].abort(); } catch (e) {}
-      delete activeAbortControllers[key];
+    if (activeAbortControllers[targetKey]) {
+      try { activeAbortControllers[targetKey].abort(); } catch (e) {}
+      delete activeAbortControllers[targetKey];
     }
-    if (!state) return;
-    state.initialized = false;
-    state.isFetching = false;
-    state.fetchStartTime = 0;
-    state.page = 1;
-    state.hasMore = true;
-    state.emptyCount = 0;
-    await ensureCategoryLoaded(key);
+    clearTimeout(safetyTimers[targetKey]);
+
+    const container = state ? document.getElementById(state.elId) : null;
+    if (container) {
+      clearErrorBanners(container);
+      container.innerHTML = getSkeletonMarkup(4);
+    }
+
+    if (state) {
+      state.initialized = false;
+      state.isFetching = false;
+      state.fetchStartTime = 0;
+      state.page = 1;
+      state.hasMore = true;
+      state.emptyCount = 0;
+      state.seenIds.clear();
+      state.queue = [];
+    }
+
+    await optimisticRefresh(targetKey);
   }
 
   function setupScrollListeners() {
@@ -293,7 +327,11 @@ window.UltraVid = window.UltraVid || {};
       if (thisEpoch === state.epoch && state.isFetching && state.queue.length === 0 && targetPage === 1) {
         console.warn(`[FeedEngine] Cold fetch timed out after ${timeoutDuration}ms for ${key}`);
         state.isFetching = false;
-        showFeedError(key);
+        const container = document.getElementById(state.elId);
+        const realCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+        if (realCards === 0 && container) {
+          showFeedError(container, key);
+        }
       }
     }, timeoutDuration);
 
@@ -372,13 +410,14 @@ window.UltraVid = window.UltraVid || {};
       });
 
       if (freshItems.length > 0 || state.queue.length > 0) {
+        const container = document.getElementById(state.elId);
+        if (container) clearErrorBanners(container);
         // Prefetch thumbnail images for this specific category batch
         prefetchThumbnails(freshItems);
         state.emptyCount = 0;
         state.page = Math.max(state.page, targetPage + 1);
 
         // Zero-Batch Wait: Immediately flush to DOM if container needs cards
-        const container = document.getElementById(state.elId);
         const activeCount = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
         if (activeCount < 4 || state.queue.length > 0) {
           renderNext(key, 0);
@@ -386,7 +425,7 @@ window.UltraVid = window.UltraVid || {};
       }
     } catch (e) {
       clearTimeout(watchdog);
-      if (e && (e.name === 'AbortError' || (e.message && e.message.includes('aborted')))) {
+      if (e && (e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort')))) {
         console.log(`[FeedEngine] Clean fetch abort for [${key}]`);
         return;
       }
@@ -396,8 +435,8 @@ window.UltraVid = window.UltraVid || {};
       if (targetPage === 1 && state.queue.length === 0) {
         const container = document.getElementById(state.elId);
         const realCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
-        if (realCards === 0) {
-          showFeedError(key);
+        if (realCards === 0 && container) {
+          showFeedError(container, key);
         }
         return;
       }
@@ -440,7 +479,8 @@ window.UltraVid = window.UltraVid || {};
     const batch = state.queue.splice(0, countToRender);
     if (batch.length === 0) return 0;
 
-    // Remove initial static skeleton placeholders if present on first real render
+    // Remove initial static skeleton placeholders and error banners if present on first real render
+    clearErrorBanners(container);
     const skeletons = container.querySelectorAll('.skeleton-card');
     if (skeletons.length > 0) {
       skeletons.forEach(s => s.remove());
@@ -493,6 +533,7 @@ window.UltraVid = window.UltraVid || {};
 
     const targetEl = document.getElementById(state.elId);
     if (!targetEl) return;
+    clearErrorBanners(targetEl);
 
     // Render skeleton inside this category container if not already present
     if (!targetEl.querySelector('.skeleton-card') && !targetEl.querySelector('.card')) {
@@ -979,6 +1020,7 @@ window.UltraVid = window.UltraVid || {};
 
     const categoryParam = key === 'trending' ? 'trending' : key;
     const container = document.getElementById(state.elId);
+    if (container) clearErrorBanners(container);
 
     // Zero-Blackout: Keep existing cards visible while in-flight.
     // If container was completely empty, show skeletons
@@ -1037,6 +1079,7 @@ window.UltraVid = window.UltraVid || {};
         // ATOMIC DOM REPLACEMENT: single tick wipe & append to eliminate phantom deduplication
         container.innerHTML = '';
         container.appendChild(fragment);
+        clearErrorBanners(container);
         refreshIcons();
         prefetchThumbnails(rawItems);
 
@@ -1051,15 +1094,18 @@ window.UltraVid = window.UltraVid || {};
           fetchBatch(key, 2);
         }
       } else if (rawItems.length === 0 && existingCards === 0 && container) {
-        showFeedError(key);
+        showFeedError(container, key);
       }
     } catch (e) {
-      if (e && (e.name === 'AbortError' || (e.message && e.message.includes('aborted')))) {
-        return;
+      if (e && (e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort')))) {
+        console.log(`[FeedEngine] Clean refresh abort for [${key}]`);
+        return; // SILENTLY RETURN - DO NOT SHOW ERROR
       }
       console.error(`[FeedEngine] Refresh failed for [${key}]:`, e);
-      if (existingCards === 0 && container) {
-        showFeedError(key);
+      // If real cards are already visible, DO NOT show an ugly full banner
+      const currentCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+      if (currentCards === 0 && container) {
+        showFeedError(container, key);
       }
     } finally {
       if (thisEpoch === state.epoch) {

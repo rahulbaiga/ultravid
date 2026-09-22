@@ -55,9 +55,52 @@ async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 1
     """Asynchronously multiplexes across category sub-taxonomies with round-robin interleaving and anti-clustering re-ranking."""
     norm_cat = (category or "all").lower().strip()
 
-    # 'all' and 'trending' use native home/trending feed fetch
-    if norm_cat in ("all", "trending"):
-        return await standard_feed_fetch(norm_cat, page=page, limit=limit, seed=seed)
+    # Dedicated bulletproof handler for 'all'
+    if norm_cat == "all":
+        try:
+            feed_res = await asyncio.wait_for(
+                fast_feed(page=page, limit=limit, seed=seed, category="all"),
+                timeout=10.0,
+            )
+            if feed_res and feed_res.get("results"):
+                return feed_res["results"][:limit]
+        except Exception as e:
+            logger.warning(f"[InnerTube] 'all' feed fallback triggered: {e}")
+
+        # Guaranteed reserve fallback for 'all'
+        reserve = get_category_reserve("all")
+        if not reserve:
+            for k, v in _CATEGORY_RESERVES.items():
+                if v:
+                    reserve.extend(v[:4])
+        if reserve:
+            rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(reserve))
+            rotated = reserve[rot:] + reserve[:rot]
+            return rotated[:limit]
+        return []
+
+    # Dedicated bulletproof handler for 'trending'
+    if norm_cat == "trending":
+        try:
+            feed_res = await asyncio.wait_for(
+                fast_feed(page=page, limit=limit, seed=seed, category="trending"),
+                timeout=10.0,
+            )
+            if feed_res and feed_res.get("results"):
+                return feed_res["results"][:limit]
+        except Exception as e:
+            logger.warning(f"[InnerTube] 'trending' feed fallback triggered: {e}")
+
+        reserve = get_category_reserve("trending") or get_category_reserve("all")
+        if not reserve:
+            for k, v in _CATEGORY_RESERVES.items():
+                if v:
+                    reserve.extend(v[:4])
+        if reserve:
+            rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(reserve))
+            rotated = reserve[rot:] + reserve[:rot]
+            return rotated[:limit]
+        return []
 
     sub_taxonomies = CATEGORY_TAXONOMY.get(norm_cat)
     if not sub_taxonomies:
