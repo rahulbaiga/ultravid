@@ -153,10 +153,10 @@ window.UltraVid = window.UltraVid || {};
 
           <!-- Custom Controls Overlay -->
           <div class="custom-player-overlay visible" id="customPlayerOverlay">
-            <!-- Top Chrome: Back + Autoplay + Settings Gear -->
-            <div class="player-top-chrome">
+            <!-- Top Chrome -->
+            <div class="player-top-chrome" id="playerTopChrome">
               <button class="player-floating-back" id="playerBackBtn" aria-label="Back">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               </button>
               <div class="player-top-actions">
                 <div class="autoplay-toggle-pill active" id="autoplayTogglePill" title="Autoplay">
@@ -165,27 +165,27 @@ window.UltraVid = window.UltraVid || {};
                   </div>
                 </div>
                 <button class="player-gear-btn" id="playerGearBtn" aria-label="Settings">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09A1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 </button>
               </div>
             </div>
 
-            <!-- Center Trio: Prev / Play-Pause / Next -->
+            <!-- Center Stage Controls Trio -->
             <div class="player-center-trio">
-              <button class="player-trio-btn nav-disabled" id="prevVideoBtn" aria-label="Previous video">
+              <button class="player-trio-btn nav-disabled" id="prevVideoBtn" aria-label="Previous">
                 <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2.5"></line></svg>
               </button>
               <button class="player-trio-btn center-play-main" id="centerPlayPauseBtn" aria-label="Play/Pause">
                 <svg id="playIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 <svg id="pauseIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
               </button>
-              <button class="player-trio-btn" id="nextVideoBtn" aria-label="Next video">
+              <button class="player-trio-btn" id="nextVideoBtn" aria-label="Next">
                 <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2.5"></line></svg>
               </button>
             </div>
 
-            <!-- Bottom Scrubber Bar -->
-            <div class="player-bottom-bar">
+            <!-- Bottom Controls Bar (Strictly Pinned to Bottom) -->
+            <div class="player-bottom-bar" id="playerBottomBar">
               <div class="player-timeline-container" id="playerTimeline">
                 <div class="timeline-track-bg">
                   <div class="timeline-buffer-bar" id="timelineBufferBar"></div>
@@ -194,7 +194,9 @@ window.UltraVid = window.UltraVid || {};
                 </div>
               </div>
               <div class="player-bottom-row">
-                <div class="player-time-display"><span id="currentTimeLabel">0:00</span> / <span id="durationLabel">0:00</span></div>
+                <div class="player-time-display">
+                  <span id="currentTimeLabel">0:00</span> / <span id="durationLabel">0:00</span>
+                </div>
                 <div class="player-right-btns">
                   <button class="player-mini-btn" id="playerFullscreenBtn" aria-label="Fullscreen">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
@@ -404,21 +406,28 @@ window.UltraVid = window.UltraVid || {};
 
     // Time & Progress Updates
     video.addEventListener('timeupdate', () => {
-      if (!isDragging && video.duration) {
-        const pct = (video.currentTime / video.duration) * 100;
+      if (!isDragging) {
+        const cur = video.currentTime || 0;
+        const dur = video.duration || 0;
+        const pct = dur > 0 ? (cur / dur) * 100 : 0;
         if (progressBar) progressBar.style.width = `${pct}%`;
         if (thumb) thumb.style.left = `${pct}%`;
-        if (currentLabel) currentLabel.textContent = formatTime(video.currentTime);
+        if (currentLabel) currentLabel.textContent = formatTime(cur);
+        if (dur > 0 && durationLabel) durationLabel.textContent = formatTime(dur);
       }
     });
 
     const updateDuration = () => {
+      if (currentLabel) currentLabel.textContent = formatTime(video.currentTime || 0);
       if (video.duration && durationLabel) {
         durationLabel.textContent = formatTime(video.duration);
       }
     };
     video.addEventListener('durationchange', updateDuration);
-    video.addEventListener('loadedmetadata', updateDuration);
+    video.addEventListener('loadedmetadata', () => {
+      if (currentLabel) currentLabel.textContent = formatTime(video.currentTime || 0);
+      if (durationLabel) durationLabel.textContent = formatTime(video.duration || 0);
+    });
 
     const updateBuffer = () => {
       if (video.buffered && video.buffered.length > 0 && video.duration && bufferBar) {
@@ -531,7 +540,7 @@ window.UltraVid = window.UltraVid || {};
 
     // Tap on overlay background toggles overlay
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay || e.target.classList.contains('player-center-controls') || e.target.classList.contains('player-center-trio')) {
+      if (e.target === overlay) {
         toggleOverlay();
       }
     });
@@ -660,6 +669,7 @@ window.UltraVid = window.UltraVid || {};
         if (speedText) speedText.textContent = spd === 1.0 ? 'Normal' : `${spd}x`;
         const overlay = document.getElementById('playerSettingsOverlay');
         if (overlay) overlay.classList.remove('active');
+        document.body.style.overflow = '';
         showToast(`Playback speed set to ${spd === 1.0 ? 'Normal' : spd + 'x'}`);
       };
     });
@@ -677,19 +687,44 @@ window.UltraVid = window.UltraVid || {};
     const unlockBtn = document.getElementById('unlockToastBtn');
     const autoPill = document.getElementById('autoplayTogglePill');
 
-    function openSettings() {
+    function openSettingsSheet() {
+      const overlay = document.getElementById('playerSettingsOverlay');
+      const mainView = document.getElementById('settingsMainMenuView');
+      const qualView = document.getElementById('settingsQualitySubView');
+      const speedView = document.getElementById('settingsSpeedSubView');
       if (!overlay) return;
+
       if (mainView) mainView.style.display = 'block';
       if (qualView) qualView.style.display = 'none';
       if (speedView) speedView.style.display = 'none';
+
       overlay.classList.add('active');
-    }
-    function closeSettings() {
-      if (overlay) overlay.classList.remove('active');
+      document.body.style.overflow = 'hidden';
     }
 
-    if (gearBtn) gearBtn.onclick = (e) => { e.stopPropagation(); openSettings(); };
-    if (overlay) overlay.onclick = (e) => { if (e.target === overlay) closeSettings(); };
+    function closeSettingsSheet() {
+      const overlay = document.getElementById('playerSettingsOverlay');
+      if (!overlay) return;
+      overlay.classList.remove('active');
+      document.body.style.overflow = '';
+    }
+
+    if (gearBtn) {
+      gearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        openSettingsSheet();
+      });
+    }
+
+    // Ensure backdrop click closes settings
+    if (overlay) {
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          closeSettingsSheet();
+        }
+      });
+    }
 
     // Sub-navigation
     const menuRowQuality = document.getElementById('menuRowQuality');
@@ -752,7 +787,7 @@ window.UltraVid = window.UltraVid || {};
     let lockToastTimer = null;
     if (lockRow) {
       lockRow.onclick = () => {
-        closeSettings();
+        closeSettingsSheet();
         isScreenLocked = true;
         if (barrier) barrier.classList.add('active');
         const customOverlay = document.getElementById('customPlayerOverlay');
@@ -1501,6 +1536,7 @@ window.UltraVid = window.UltraVid || {};
       if (speedView) speedView.style.display = 'none';
       if (qualView) qualView.style.display = 'block';
       overlay.classList.add('active');
+      document.body.style.overflow = 'hidden';
     }
 
     if (!currentAvailableQualities || currentAvailableQualities.length === 0) {
@@ -1526,6 +1562,7 @@ window.UltraVid = window.UltraVid || {};
   function closeQualityPicker() {
     const overlay = document.getElementById('playerSettingsOverlay');
     if (overlay) overlay.classList.remove('active');
+    document.body.style.overflow = '';
   }
 
   function openDownloads(customUrl = null) {

@@ -121,6 +121,7 @@
     const settingsOverlay = document.getElementById('playerSettingsOverlay');
     if (settingsOverlay && settingsOverlay.classList.contains('active')) {
       settingsOverlay.classList.remove('active');
+      document.body.style.overflow = '';
       return;
     }
 

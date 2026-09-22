@@ -416,21 +416,15 @@ body.watch-route-active main.wrap {
 
 /* Floating Back Button */
 .player-floating-back {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
+  width: 40px;
+  height: 40px;
+  background: transparent;
   border: none;
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: opacity 0.2s ease, transform 0.15s ease;
-}
-.player-floating-back:active {
-  transform: scale(0.92);
 }
 
 /* Custom Controls Overlay Layer */
@@ -440,28 +434,27 @@ body.watch-route-active main.wrap {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  background: rgba(0, 0, 0, 0.42);
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.22s ease, visibility 0.22s ease;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
   z-index: 20;
+  pointer-events: none; /* Let touches pass to gesture zones when idle */
 }
 
 .custom-player-overlay.visible {
   opacity: 1;
   visibility: visible;
+  pointer-events: auto;
 }
 
-/* Double-Tap Gesture Zones */
+/* Gesture Zones - Strictly bound between header and bottom bar */
 .gesture-zone {
   position: absolute;
-  top: 0;
-  bottom: 48px;
-  width: 42%;
-  z-index: 22;
+  top: 54px;    /* Never overlap top chrome */
+  bottom: 54px; /* Never overlap bottom timeline */
+  width: 38%;
+  z-index: 15;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -490,7 +483,7 @@ body.watch-route-active main.wrap {
   transform: scale(1);
 }
 
-/* --- PLAYER TOP & CENTER CHROME OVERHAUL --- */
+/* Top Chrome Bar - Absolute Top */
 .player-top-chrome {
   position: absolute;
   top: 0;
@@ -501,22 +494,22 @@ body.watch-route-active main.wrap {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  background: linear-gradient(rgba(0,0,0,0.65), transparent);
-  z-index: 30;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 70%, transparent 100%);
+  z-index: 50;
   pointer-events: auto;
 }
 
 .player-top-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 /* Autoplay Pill Switch */
 .autoplay-toggle-pill {
-  width: 38px;
+  width: 36px;
   height: 20px;
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.3);
   border-radius: 12px;
   position: relative;
   cursor: pointer;
@@ -539,7 +532,7 @@ body.watch-route-active main.wrap {
   justify-content: center;
 }
 .autoplay-toggle-pill.active .autoplay-toggle-thumb {
-  transform: translateX(18px);
+  transform: translateX(16px);
 }
 .autoplay-toggle-thumb svg {
   width: 8px;
@@ -552,24 +545,23 @@ body.watch-route-active main.wrap {
 
 /* Settings Gear Icon */
 .player-gear-btn {
+  width: 40px;
+  height: 40px;
   background: transparent;
   border: none;
   color: #ffffff;
-  padding: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   border-radius: 50%;
-  transition: background 0.15s ease;
-  width: 40px;
-  height: 40px;
+  padding: 0;
 }
 .player-gear-btn:active {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.2);
 }
 
-/* Center Control Trio (Prev / Play-Pause / Next) */
+/* Center Stage Controls Trio */
 .player-center-trio {
   position: absolute;
   top: 50%;
@@ -578,9 +570,9 @@ body.watch-route-active main.wrap {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 34px;
-  z-index: 25;
-  pointer-events: none;
+  gap: 36px;
+  z-index: 40;
+  pointer-events: auto;
 }
 
 .player-trio-btn {
@@ -591,10 +583,7 @@ body.watch-route-active main.wrap {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  pointer-events: auto;
-  transition: opacity 0.2s ease, transform 0.15s ease;
-  width: 36px;
-  height: 36px;
+  transition: transform 0.15s ease, opacity 0.2s ease;
 }
 .player-trio-btn:active {
   transform: scale(0.88);
@@ -602,7 +591,6 @@ body.watch-route-active main.wrap {
 .player-trio-btn.nav-disabled {
   opacity: 0.32 !important;
   pointer-events: none !important;
-  cursor: default !important;
 }
 
 .center-play-main {
@@ -612,16 +600,17 @@ body.watch-route-active main.wrap {
   background: rgba(0, 0, 0, 0.65);
 }
 
-/* --- YOUTUBE SETTINGS BOTTOM SHEET MODAL --- */
+/* Settings Modal Overlay - Ultra High Z-Index */
 .settings-modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(4px);
-  z-index: 2100;
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 99999;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -808,20 +797,24 @@ body.watch-route-active main.wrap {
   animation: infinite-dash 1.4s ease-in-out infinite;
 }
 
-/* Bottom Control Bar & Red Scrubber */
+/* Bottom Controls Bar - Strictly Pinned to Absolute Bottom */
 .player-bottom-bar {
-  width: 100%;
-  padding: 0 10px 6px 10px;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0 12px 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 65%, transparent 100%);
+  z-index: 50;
   pointer-events: auto;
 }
 
 .player-timeline-container {
   width: 100%;
-  height: 18px;
+  height: 20px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -838,7 +831,7 @@ body.watch-route-active main.wrap {
   transition: height 0.12s ease;
 }
 .player-timeline-container:active .timeline-track-bg {
-  height: 5px;
+  height: 5.5px;
 }
 
 .timeline-buffer-bar {
@@ -865,17 +858,12 @@ body.watch-route-active main.wrap {
   position: absolute;
   top: 50%;
   left: 0%;
-  transform: translate(-50%, -50%) scale(0);
+  transform: translate(-50%, -50%) scale(1);
   width: 12px;
   height: 12px;
   border-radius: 50%;
   background: #ff0033;
-  transition: transform 0.15s ease;
   pointer-events: none;
-}
-.player-timeline-container:active .timeline-scrubber-thumb,
-.custom-player-overlay.visible .timeline-scrubber-thumb {
-  transform: translate(-50%, -50%) scale(1);
 }
 
 .player-bottom-row {
@@ -883,14 +871,15 @@ body.watch-route-active main.wrap {
   align-items: center;
   justify-content: space-between;
   color: #fff;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
-  padding: 0 4px;
+  padding: 0 2px;
 }
 
 .player-time-display {
   letter-spacing: 0.3px;
   color: #f1f1f1;
+  font-variant-numeric: tabular-nums;
 }
 
 .player-right-btns {
@@ -901,9 +890,9 @@ body.watch-route-active main.wrap {
 .player-mini-btn {
   background: transparent;
   border: none;
-  color: #fff;
-  cursor: pointer;
+  color: #ffffff;
   padding: 4px;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
