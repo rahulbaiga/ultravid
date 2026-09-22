@@ -95,9 +95,11 @@ window.UltraVid = window.UltraVid || {};
   }
 
   function clearErrorBanners(container) {
-    if (!container) return;
-    const banners = container.querySelectorAll('.feed-error-banner, .error-card, .error-container, [data-error-banner="true"]');
-    banners.forEach(b => b.remove());
+    const root = container || document;
+    try {
+      const banners = root.querySelectorAll('.feed-error-banner, .error-card, .error-container, [data-error-banner="true"]');
+      banners.forEach(b => b.remove());
+    } catch (e) {}
   }
 
   function showFeedError(containerOrKey, key) {
@@ -1059,11 +1061,13 @@ window.UltraVid = window.UltraVid || {};
     state.isFetching = true;
     state.fetchStartTime = Date.now();
     const thisEpoch = ++state.epoch;
-    state.seed = Math.floor(Math.random() * 100000);
+    const dynamicSeed = Math.floor(Math.random() * 900000) + 100000;
+    state.seed = dynamicSeed;
 
     const categoryParam = key === 'trending' ? 'trending' : key;
     const container = document.getElementById(state.elId);
     if (container) clearErrorBanners(container);
+    clearErrorBanners(document);
 
     // Zero-Blackout: Keep existing cards visible while in-flight.
     // If container was completely empty, show skeletons
@@ -1139,15 +1143,17 @@ window.UltraVid = window.UltraVid || {};
         container.innerHTML = '';
         container.appendChild(fragment);
         clearErrorBanners(container);
+        clearErrorBanners(document);
         refreshIcons();
         prefetchThumbnails(rawItems);
 
         const cardsAfter = container.querySelectorAll('.card:not(.skeleton-card)').length;
         if (window.telemetry) {
-          window.telemetry.emit('DOM', 'info', `optimisticRefresh ATOMIC SWAP complete [${key}]`, {
+          window.telemetry.emit('REFRESH_SUCCESS', 'info', `[REFRESH-SUCCESS] Atomic swap executed with ${rawItems.length} brand new videos [${key}]`, {
             cardsBefore: existingCards,
             swappedCount: rawItems.length,
-            cardsAfter: cardsAfter
+            cardsAfter: cardsAfter,
+            seed: state.seed
           });
         }
 
@@ -1185,6 +1191,8 @@ window.UltraVid = window.UltraVid || {};
           window.telemetry.emit('STATE', 'warn', `showFeedError triggered in optimisticRefresh [${key}]`, { currentCards: 0 });
         }
         showFeedError(container, key);
+      } else if (container) {
+        clearErrorBanners(container);
       }
     } finally {
       if (thisEpoch === state.epoch) {

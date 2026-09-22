@@ -2,6 +2,13 @@
 from typing import Dict, List, Optional
 
 CATEGORY_TAXONOMY: Dict[str, List[Dict[str, str]]] = {
+    "all": [
+        {"sub": "trending", "query": "trending popular videos documentary stories"},
+        {"sub": "science_tech", "query": "mind blowing science innovations technology future"},
+        {"sub": "entertainment", "query": "popular entertainment cinema comedy music viral"},
+        {"sub": "knowledge", "query": "interesting documentary fascinating history facts"},
+        {"sub": "world", "query": "incredible places travel culture nature documentary"},
+    ],
     "science": [
         {"sub": "quantum", "query": "quantum physics quantum computing mechanics"},
         {"sub": "chemistry", "query": "chemistry experiments chemical reactions science laboratory"},
@@ -54,6 +61,12 @@ CATEGORY_TAXONOMY: Dict[str, List[Dict[str, str]]] = {
         {"sub": "pop_rock", "query": "official music video rock pop hits"},
         {"sub": "electronic", "query": "electronic synthwave edm ambient production"},
         {"sub": "lofi", "query": "lofi hip hop instrumental chill beats"},
+    ],
+    "trending": [
+        {"sub": "trending_now", "query": "trending popular viral videos now"},
+        {"sub": "creators", "query": "top creator videos viral moments"},
+        {"sub": "entertainment", "query": "popular entertainment viral show highlights"},
+        {"sub": "discoveries", "query": "viral innovations technology world records"},
     ],
 }
 
@@ -138,10 +151,20 @@ PAGE_MODIFIERS: List[str] = [
     "analysis",
 ]
 
+REFRESH_JITTERS: List[str] = [
+    "trending",
+    "latest 2026",
+    "breakthroughs",
+    "viral moments",
+    "deep dive",
+    "popular highlights",
+    "must watch",
+    "fascinating",
+]
 
-def get_page_modified_query(base_query: str, page: int) -> str:
-    """Mutates query across deep pages to prevent search pagination collapse and duplicate video IDs."""
-    if page <= 1:
-        return base_query
-    mod = PAGE_MODIFIERS[(page - 1) % len(PAGE_MODIFIERS)]
-    return f"{base_query} {mod}".strip() if mod else base_query
+
+def get_page_modified_query(base_query: str, page: int, seed: int = 0) -> str:
+    """Mutates query across pages and random seeds to guarantee fresh, non-deterministic recommendation sets."""
+    idx = (page - 1 + (int(seed or 0) % len(REFRESH_JITTERS))) % len(REFRESH_JITTERS)
+    jitter = REFRESH_JITTERS[idx]
+    return f"{base_query} {jitter}".strip()

@@ -2,9 +2,12 @@
 Provides multi-query taxonomy multiplexing, round-robin interleaving, and anti-clustering re-ranking.
 """
 import asyncio
+import logging
 import random
 import time
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger("ultravid.innertube")
 
 from app.innertube import (
     fast_feed,
@@ -55,53 +58,6 @@ async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 1
     """Asynchronously multiplexes across category sub-taxonomies with round-robin interleaving and anti-clustering re-ranking."""
     norm_cat = (category or "all").lower().strip()
 
-    # Dedicated bulletproof handler for 'all'
-    if norm_cat == "all":
-        try:
-            feed_res = await asyncio.wait_for(
-                fast_feed(page=page, limit=limit, seed=seed, category="all"),
-                timeout=10.0,
-            )
-            if feed_res and feed_res.get("results"):
-                return feed_res["results"][:limit]
-        except Exception as e:
-            logger.warning(f"[InnerTube] 'all' feed fallback triggered: {e}")
-
-        # Guaranteed reserve fallback for 'all'
-        reserve = get_category_reserve("all")
-        if not reserve:
-            for k, v in _CATEGORY_RESERVES.items():
-                if v:
-                    reserve.extend(v[:4])
-        if reserve:
-            rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(reserve))
-            rotated = reserve[rot:] + reserve[:rot]
-            return rotated[:limit]
-        return []
-
-    # Dedicated bulletproof handler for 'trending'
-    if norm_cat == "trending":
-        try:
-            feed_res = await asyncio.wait_for(
-                fast_feed(page=page, limit=limit, seed=seed, category="trending"),
-                timeout=10.0,
-            )
-            if feed_res and feed_res.get("results"):
-                return feed_res["results"][:limit]
-        except Exception as e:
-            logger.warning(f"[InnerTube] 'trending' feed fallback triggered: {e}")
-
-        reserve = get_category_reserve("trending") or get_category_reserve("all")
-        if not reserve:
-            for k, v in _CATEGORY_RESERVES.items():
-                if v:
-                    reserve.extend(v[:4])
-        if reserve:
-            rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(reserve))
-            rotated = reserve[rot:] + reserve[:rot]
-            return rotated[:limit]
-        return []
-
     sub_taxonomies = CATEGORY_TAXONOMY.get(norm_cat)
     if not sub_taxonomies:
         # Dynamic fallback taxonomy for any untracked / custom chip
@@ -115,7 +71,7 @@ async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 1
     # Rotate sub-topics according to page offset and seed to guarantee variety across pages and refreshes
     num_subtopics = len(sub_taxonomies)
     subtopics_per_page = min(4, num_subtopics)
-    offset = ((page - 1) * 2 + int(seed or 0)) % num_subtopics
+    offset = (((page - 1) * 2) + (int(seed or 0) % num_subtopics)) % num_subtopics
     selected_subs = [sub_taxonomies[(offset + i) % num_subtopics] for i in range(subtopics_per_page)]
 
     # Asynchronously fetch candidates across all selected sub-topics in parallel
@@ -123,7 +79,7 @@ async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 1
     items_per_sub = max(3, (limit // subtopics_per_page) + 2)
 
     for sub_def in selected_subs:
-        mod_query = get_page_modified_query(sub_def["query"], page)
+        mod_query = get_page_modified_query(sub_def["query"], page, seed=seed)
         fetch_tasks.append(search_innertube(mod_query, limit=items_per_sub, page=page))
 
     raw_sub_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
@@ -154,8 +110,16 @@ async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 1
     # Fallback to category-isolated reserves if online candidates are insufficient
     if len(candidates) < limit:
         reserve = get_category_reserve(norm_cat)
+        if not reserve and norm_cat in ("all", "trending"):
+            reserve = get_category_reserve("all") or get_category_reserve("trending")
+        if not reserve:
+            for k, v in _CATEGORY_RESERVES.items():
+                if v:
+                    reserve.extend(v[:4])
         if reserve:
-            for idx, res_item in enumerate(reserve):
+            rot = (((page - 1) * limit) + (int(seed or 0) % max(1, len(reserve)))) % max(1, len(reserve))
+            rotated_reserve = reserve[rot:] + reserve[:rot]
+            for idx, res_item in enumerate(rotated_reserve):
                 vid_id = res_item.get("id")
                 if vid_id and vid_id not in seen_in_batch:
                     seen_in_batch.add(vid_id)

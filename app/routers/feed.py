@@ -1,10 +1,11 @@
 """Category Feed and Trending recommendations router."""
 import asyncio
 import logging
+import random
+import time
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
-import time
 from app.models.feed import SearchResponse
 from app.core.cache import get_cached_feed, set_cached_feed, invalidate_feed_cache
 from app.services.innertube import get_diverse_category_feed, fast_feed, get_category_reserve, CATEGORY_TAXONOMY
@@ -31,7 +32,7 @@ async def api_feed(
         if refresh:
             invalidate_feed_cache(norm_cat)
             if seed == 0:
-                seed = int(time.time() * 1000) % 100000
+                seed = random.randint(100000, 999999)
 
         # 1. Check in-memory 15-minute TTL cache first (only when not refreshing)
         if not refresh:
@@ -82,7 +83,7 @@ async def api_feed(
                     res.extend(v[:4])
 
         if res:
-            rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(res))
+            rot = (((page - 1) * limit) + (int(seed or 0) % max(1, len(res)))) % max(1, len(res))
             rotated = res[rot:] + res[:rot]
             sub_taxonomies = CATEGORY_TAXONOMY.get(norm_cat, [])
             tagged_rotated = []
@@ -102,7 +103,7 @@ async def api_feed(
         try:
             res = get_category_reserve(category or "all") or get_category_reserve("all")
             if res:
-                rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(res))
+                rot = (((page - 1) * limit) + (int(seed or 0) % max(1, len(res)))) % max(1, len(res))
                 rotated = res[rot:] + res[:rot]
                 return {"query": f"feed:{category or 'all'}", "results": rotated[:limit]}
         except Exception:
