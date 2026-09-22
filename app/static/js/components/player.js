@@ -1,7 +1,7 @@
 /**
  * UltraVid Video Player & Downloads Component
  * Tokenized Invalidation Lifecycle & In-DOM Error State Machine
- * YouTube Mobile UI/UX Parity: Edge-to-Edge Player, Horizontal Action Pills, Up Next Feed
+ * YouTube Mobile UI/UX Parity: Edge-to-Edge Player, Horizontal Action Pills, Buffer-Gated Deferred Up Next Feed
  */
 window.UltraVid = window.UltraVid || {};
 
@@ -45,6 +45,7 @@ window.UltraVid = window.UltraVid || {};
   // Tokenized Invalidation Pattern (Request Generation Counter)
   let currentPlaybackToken = 0;
   let lastFailedItem = null;
+  let currentBufferCheckCleanup = null;
 
   function init(callbacks = {}) {
     homeView = document.getElementById("tab-home") || document.getElementById("homeView");
@@ -168,7 +169,7 @@ window.UltraVid = window.UltraVid || {};
             </button>
 
             <button class="action-pill" id="qualitySelectorBtn">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
               <span id="activeQualityLabel">720p</span>
             </button>
           </div>
@@ -186,10 +187,14 @@ window.UltraVid = window.UltraVid || {};
           </div>
         </div>
 
-        <!-- 6. Up Next Section -->
+        <!-- 6. Up Next Section (Lightweight Placeholder - 0 Initial Network Calls) -->
         <div class="watch-up-next-section">
           <div class="up-next-heading">Up next</div>
-          <div id="upNextContainer"></div>
+          <div id="upNextContainer">
+            <div class="up-next-skeleton-box" style="padding:16px;text-align:center;color:#666;font-size:12px;">
+              Suggestions will load once playback stabilizes...
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -424,7 +429,7 @@ window.UltraVid = window.UltraVid || {};
 
       card.innerHTML = `
         <div class="up-next-thumb-wrap">
-          <img src="${it.thumbnail || ''}" loading="lazy" alt="${escapeHtml(it.title || '')}" />
+          <img src="${it.thumbnail || ''}" loading="lazy" decoding="async" alt="${escapeHtml(it.title || '')}" />
           ${durBadge}
         </div>
         <div class="up-next-info">
@@ -457,9 +462,130 @@ window.UltraVid = window.UltraVid || {};
     upNextEl.appendChild(fragment);
   }
 
-  function openWatch(url, preview = null, rel = []) {
+  // Phase 3: Buffer-Gated & Playback-Stabilized Deferred Up Next Engine
+  function attachBufferGatedUpNextLoader(videoElement, videoId, category, queryTitle, thisToken, targetUrl) {
+    if (currentBufferCheckCleanup) {
+      currentBufferCheckCleanup();
+      currentBufferCheckCleanup = null;
+    }
+
+    if (!videoElement) return;
+
+    let upNextLoaded = false;
+    let playbackTimer = null;
+
+    function cleanup() {
+      videoElement.removeEventListener('timeupdate', onBufferCheck);
+      videoElement.removeEventListener('playing', onPlaying);
+      if (playbackTimer) {
+        clearTimeout(playbackTimer);
+        playbackTimer = null;
+      }
+    }
+
+    currentBufferCheckCleanup = cleanup;
+
+    function triggerUpNextFetch() {
+      if (upNextLoaded) return;
+      if (thisToken !== currentPlaybackToken || !isWatchOpen || currentUrl !== targetUrl) {
+        cleanup();
+        return;
+      }
+      upNextLoaded = true;
+      cleanup();
+
+      console.log('[PERF] Playback buffer healthy. Initiating deferred Up Next loading.');
+
+      const deferMethod = window.requestIdleCallback || ((cb) => setTimeout(cb, 100));
+      deferMethod(() => {
+        fetchAndRenderUpNext(videoId, category, queryTitle, thisToken, targetUrl);
+      });
+    }
+
+    function onBufferCheck() {
+      if (videoElement.buffered && videoElement.buffered.length > 0) {
+        const current = videoElement.currentTime || 0;
+        let forwardBuffer = 0;
+        for (let i = 0; i < videoElement.buffered.length; i++) {
+          if (videoElement.buffered.start(i) <= current && current <= videoElement.buffered.end(i)) {
+            forwardBuffer = videoElement.buffered.end(i) - current;
+            break;
+          }
+        }
+        const maxDur = videoElement.duration;
+        // User criteria: 15 to 20 seconds forward buffer loaded, or near end for short clips
+        if (forwardBuffer >= 15 || (maxDur && !isNaN(maxDur) && maxDur < 15 && forwardBuffer >= maxDur - 1)) {
+          triggerUpNextFetch();
+        }
+      }
+    }
+
+    function onPlaying() {
+      // Fallback: If buffer API reports slowly, trigger after 3.5s of smooth playback
+      if (!playbackTimer) {
+        playbackTimer = setTimeout(() => {
+          triggerUpNextFetch();
+        }, 3500);
+      }
+    }
+
+    videoElement.addEventListener('timeupdate', onBufferCheck);
+    videoElement.addEventListener('playing', onPlaying);
+  }
+
+  async function fetchAndRenderUpNext(videoId, category, queryTitle, thisToken, targetUrl) {
+    if (thisToken !== currentPlaybackToken || !isWatchOpen || currentUrl !== targetUrl) return;
+
+    const upNextEl = document.getElementById("upNextContainer");
+    if (!upNextEl) return;
+
+    // Show non-blocking shimmer placeholder while fetching
+    upNextEl.innerHTML = `
+      <div class="up-next-card" style="opacity:0.6;pointer-events:none;">
+        <div class="up-next-thumb-wrap skel"></div>
+        <div class="up-next-info">
+          <div class="skel" style="height:14px;width:80%;margin-bottom:6px;"></div>
+          <div class="skel" style="height:11px;width:50%;"></div>
+        </div>
+      </div>
+      <div class="up-next-card" style="opacity:0.6;pointer-events:none;">
+        <div class="up-next-thumb-wrap skel"></div>
+        <div class="up-next-info">
+          <div class="skel" style="height:14px;width:75%;margin-bottom:6px;"></div>
+          <div class="skel" style="height:11px;width:40%;"></div>
+        </div>
+      </div>
+    `;
+
+    let rel = [];
+    try {
+      const q = queryTitle || (currentData?.title || "").split(" ").slice(0, 3).join(" ");
+      if (q) {
+        const rr = await window.UltraVid.api.fetchSearch(q, { maxResults: 8 });
+        rel = (rr && rr.results) || [];
+      }
+      if (!rel.length && category) {
+        const rr = await window.UltraVid.api.fetchFeed({ category, limit: 8 });
+        rel = (rr && rr.results) || [];
+      }
+    } catch (e) {
+      console.warn('[PERF] Up Next deferred fetch error:', e);
+    }
+
+    if (thisToken !== currentPlaybackToken || !isWatchOpen || currentUrl !== targetUrl) return;
+
+    const filtered = rel.filter(x => x.url !== targetUrl && x.id !== videoId);
+    renderRelatedVideos(filtered);
+  }
+
+  function openWatch(url, preview = null) {
     currentUrl = url;
     isWatchOpen = true;
+
+    // Phase 1: Immediately cancel all pending background requests to guarantee 100% video bandwidth
+    if (window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.abortAllBackgroundRequests === 'function') {
+      window.UltraVid.api.abortAllBackgroundRequests();
+    }
 
     // Apply route-level class to hide app header and zero-out padding
     document.body.classList.add('watch-route-active');
@@ -495,8 +621,6 @@ window.UltraVid = window.UltraVid || {};
     if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
     if (likeBtn) likeBtn.classList.remove("active");
     if (dislikeBtn) dislikeBtn.classList.remove("active");
-
-    renderRelatedVideos(rel);
 
     window.scrollTo({ top: 0, behavior: "instant" });
     refreshIcons();
@@ -563,21 +687,17 @@ window.UltraVid = window.UltraVid || {};
     if (likeBtn) likeBtn.classList.remove("active");
     if (dislikeBtn) dislikeBtn.classList.remove("active");
 
-    let rel = [];
-    try {
-      const q = (lastQuery && !isUrl(lastQuery)) ? lastQuery : (d.title || "").split(" ").slice(0, 3).join(" ");
-      if (q) {
-        const rr = await window.UltraVid.api.fetchSearch(q, { maxResults: 10 });
-        rel = (rr && rr.results) || [];
-      }
-    } catch (e) {}
-
-    if (thisToken !== null && thisToken !== currentPlaybackToken) return;
-    if (isWatchOpen && currentUrl === url) {
-      renderRelatedVideos(rel.filter(x => x.url !== url));
-    }
-
     refreshIcons();
+
+    // Phase 3: Attach buffer-gated deferred loader (100% bandwidth dedicated to stream startup)
+    attachBufferGatedUpNextLoader(
+      videoEl,
+      d.id || extractVideoId(url, d),
+      d.category || '',
+      (lastQuery && !isUrl(lastQuery)) ? lastQuery : (d.title || "").split(" ").slice(0, 3).join(" "),
+      thisToken,
+      url
+    );
   }
 
   async function loadAndPlay(itemOrUrl, lastQuery = "") {
@@ -594,10 +714,15 @@ window.UltraVid = window.UltraVid || {};
 
     if (!url) return;
 
+    // Phase 1: Immediately cancel any background requests before stream extraction
+    if (window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.abortAllBackgroundRequests === 'function') {
+      window.UltraVid.api.abortAllBackgroundRequests();
+    }
+
     const thisToken = ++currentPlaybackToken;
     lastFailedItem = preview;
 
-    openWatch(url, preview, []);
+    openWatch(url, preview);
 
     try {
       const d = await window.UltraVid.api.extractStream(url);
@@ -627,6 +752,12 @@ window.UltraVid = window.UltraVid || {};
   function teardownWatchUI() {
     currentPlaybackToken++;
     pause();
+
+    if (currentBufferCheckCleanup) {
+      currentBufferCheckCleanup();
+      currentBufferCheckCleanup = null;
+    }
+
     document.body.classList.remove('watch-route-active');
 
     const player = document.getElementById("mainVideoPlayer") || document.getElementById("mainVideo") || videoEl;
@@ -841,6 +972,7 @@ window.UltraVid = window.UltraVid || {};
     getCurrentUrl,
     setCurrentUrl,
     showPlayerErrorState,
-    hidePlayerErrorState
+    hidePlayerErrorState,
+    attachBufferGatedUpNextLoader
   };
 })();

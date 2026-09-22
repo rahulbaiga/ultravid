@@ -109,8 +109,41 @@ window.UltraVid = window.UltraVid || {};
     }
   }
 
+  let feedAbortController = null;
+
+  function getFeedSignal() {
+    if (!feedAbortController) {
+      feedAbortController = new AbortController();
+    }
+    return feedAbortController.signal;
+  }
+
+  function abortAllBackgroundRequests() {
+    if (feedAbortController) {
+      try {
+        feedAbortController.abort();
+      } catch (e) {}
+      feedAbortController = null;
+      console.log('[NETWORK] Aborted all pending background feed requests for playback priority.');
+    }
+  }
+
   async function fetchFeed(params = {}, opts = {}) {
-    const signal = params.signal || (opts && opts.signal);
+    const passedSignal = params.signal || (opts && opts.signal);
+    const bgSignal = getFeedSignal();
+
+    let effectiveSignal = bgSignal;
+    if (passedSignal) {
+      const chainedController = new AbortController();
+      if (passedSignal.aborted || bgSignal.aborted) {
+        chainedController.abort();
+      } else {
+        passedSignal.addEventListener("abort", () => chainedController.abort(), { once: true });
+        bgSignal.addEventListener("abort", () => chainedController.abort(), { once: true });
+      }
+      effectiveSignal = chainedController.signal;
+    }
+
     const { page = 1, limit = 12, seed = 0, category = 'all', refresh = false } = params;
     const qs = new URLSearchParams({
       page: String(page),
@@ -122,7 +155,7 @@ window.UltraVid = window.UltraVid || {};
     if (refresh) {
       qs.set('refresh', 'true');
     }
-    return fetchApi(`/api/feed?${qs.toString()}`, { signal });
+    return fetchApi(`/api/feed?${qs.toString()}`, { signal: effectiveSignal });
   }
 
   async function fetchSearch(query, params = {}) {
@@ -216,6 +249,11 @@ window.UltraVid = window.UltraVid || {};
     fetchSuggestions,
     extractStream,
     startDownload,
-    getDownloadStatus
+    getDownloadStatus,
+    getFeedSignal,
+    abortAllBackgroundRequests
   };
+
+  window.abortAllBackgroundRequests = abortAllBackgroundRequests;
+  window.getFeedSignal = getFeedSignal;
 })();

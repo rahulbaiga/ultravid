@@ -336,7 +336,12 @@
 
     // 3. Initialize Feed
     feed.init({
-      onPlay: (url) => player.loadAndPlay(url, lastQuery),
+      onPlay: (url) => {
+        if (api && typeof api.abortAllBackgroundRequests === 'function') {
+          api.abortAllBackgroundRequests();
+        }
+        player.loadAndPlay(url, lastQuery);
+      },
       onQuickAction: (vid) => actionSheet.open(vid)
     });
 
@@ -406,6 +411,9 @@
     // 8. Handle direct watch URL hash if present
     if (hash && hash.startsWith("#watch/")) {
       document.body.classList.add('watch-route-active');
+      if (api && typeof api.abortAllBackgroundRequests === 'function') {
+        api.abortAllBackgroundRequests();
+      }
       const vidId = hash.replace("#watch/", "").trim();
       if (vidId) {
         player.loadAndPlay(`https://www.youtube.com/watch?v=${vidId}`);
