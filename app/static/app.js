@@ -193,10 +193,15 @@
     return ptrSpinner;
   }
 
+  let lastMoveLogTime = 0;
   window.addEventListener('touchstart', (e) => {
-    if (canPullToRefresh() && e.touches && e.touches.length === 1) {
+    const canPull = canPullToRefresh();
+    if (canPull && e.touches && e.touches.length === 1) {
       touchStartY = e.touches[0].clientY;
       isPulling = true;
+      if (window.telemetry) {
+        window.telemetry.emit('PTR', 'info', 'Touch start', { scrollY: window.scrollY, touchY: touchStartY });
+      }
     } else {
       isPulling = false;
     }
@@ -206,6 +211,17 @@
     if (!isPulling || window.scrollY > 0) return;
     const currentY = e.touches[0].clientY;
     const pullDistance = (currentY - touchStartY) * 0.45; // Elastic damping factor
+
+    const now = Date.now();
+    if (now - lastMoveLogTime > 250 && window.telemetry) {
+      lastMoveLogTime = now;
+      window.telemetry.emit('PTR', 'info', 'Touch move progress', {
+        pullDistance: Math.round(pullDistance),
+        thresholdMet: pullDistance >= PULL_THRESHOLD,
+        threshold: PULL_THRESHOLD,
+        scrollY: window.scrollY
+      });
+    }
 
     const spinner = getPtrSpinner();
     if (pullDistance > 10 && spinner) {
@@ -221,11 +237,24 @@
     const pullDistance = (currentY - touchStartY) * 0.45;
     const spinner = getPtrSpinner();
 
+    if (window.telemetry) {
+      window.telemetry.emit('PTR', 'info', 'Touch released', {
+        diffY: Math.round(pullDistance),
+        thresholdMet: pullDistance >= PULL_THRESHOLD,
+        scrollY: window.scrollY
+      });
+    }
+
     if (pullDistance >= PULL_THRESHOLD) {
       if (spinner) spinner.style.top = '70px';
       const activeCat = window.currentActiveCategory
         || (window.UltraVid && window.UltraVid.chips && typeof window.UltraVid.chips.getCategory === 'function' ? window.UltraVid.chips.getCategory() : null)
         || 'all';
+
+      if (window.telemetry) {
+        window.telemetry.emit('REFRESH', 'info', 'optimisticRefresh triggered', { category: activeCat });
+      }
+
       const feed = (window.UltraVid && window.UltraVid.feed) || window.FeedComponent;
       try {
         if (feed && typeof feed.optimisticRefresh === 'function') {

@@ -313,6 +313,17 @@ window.UltraVid = window.UltraVid || {};
     state.fetchStartTime = Date.now();
     const thisEpoch = ++state.epoch;
 
+    if (window.telemetry) {
+      window.telemetry.emit('STATE', 'info', `fetchBatch entry [${key}] p:${targetPage}`, {
+        key: key,
+        page: targetPage,
+        isFetching: state.isFetching,
+        epoch: thisEpoch,
+        seenIdsCount: state.seenIds ? state.seenIds.size : 0,
+        queueLength: state.queue ? state.queue.length : 0
+      });
+    }
+
     const timeoutDuration = (targetPage === 1) ? 18000 : 25000;
 
     clearTimeout(safetyTimers[key]);
@@ -361,6 +372,16 @@ window.UltraVid = window.UltraVid || {};
       }
 
       const rawItems = (j && Array.isArray(j.results)) ? j.results : [];
+      const firstTwo = rawItems.slice(0, 2).map(it => it.title || it.id || '');
+      const duplicateCount = rawItems.filter(it => it.id && state.seenIds.has(it.id)).length;
+      if (window.telemetry) {
+        window.telemetry.emit('FETCH', 'info', `fetchBatch response [${key}] p:${targetPage}`, {
+          resultsCount: rawItems.length,
+          firstTwoTitles: firstTwo,
+          duplicateCount: duplicateCount,
+          isAllDuplicate: rawItems.length > 0 && duplicateCount === rawItems.length
+        });
+      }
 
       if (rawItems.length === 0) {
         state.emptyCount = (state.emptyCount || 0) + 1;
@@ -425,7 +446,15 @@ window.UltraVid = window.UltraVid || {};
       }
     } catch (e) {
       clearTimeout(watchdog);
-      if (e && (e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort')))) {
+      const isAbort = e && (e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort')));
+      if (window.telemetry) {
+        window.telemetry.emit('FETCH', isAbort ? 'info' : 'error', `fetchBatch error [${key}] p:${targetPage}`, {
+          errorName: e ? e.name : 'Unknown',
+          errorMessage: e ? e.message : String(e),
+          isAbort: Boolean(isAbort)
+        });
+      }
+      if (isAbort) {
         console.log(`[FeedEngine] Clean fetch abort for [${key}]`);
         return;
       }
@@ -436,6 +465,9 @@ window.UltraVid = window.UltraVid || {};
         const container = document.getElementById(state.elId);
         const realCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
         if (realCards === 0 && container) {
+          if (window.telemetry) {
+            window.telemetry.emit('STATE', 'warn', `showFeedError triggered in fetchBatch [${key}]`, { realCards: 0 });
+          }
           showFeedError(container, key);
         }
         return;
@@ -473,6 +505,7 @@ window.UltraVid = window.UltraVid || {};
 
     const container = document.getElementById(state.elId);
     if (!container) return 0;
+    const cardsBefore = container.querySelectorAll('.card:not(.skeleton-card)').length;
 
     // If maxCount is 0 or unassigned, flush all available items in state.queue immediately
     const countToRender = maxCount > 0 ? Math.min(maxCount, state.queue.length) : state.queue.length;
@@ -507,6 +540,16 @@ window.UltraVid = window.UltraVid || {};
     container.appendChild(fragment);
     refreshIcons();
     state.initialized = true;
+
+    const cardsAfter = container.querySelectorAll('.card:not(.skeleton-card)').length;
+    if (window.telemetry) {
+      window.telemetry.emit('DOM', 'info', `renderNext mounted cards [${key}]`, {
+        key: key,
+        cardsBefore: cardsBefore,
+        renderedCount: batch.length,
+        cardsAfter: cardsAfter
+      });
+    }
 
     if (isKeyActive(key)) {
       updateCardObserver(key);
@@ -1029,6 +1072,15 @@ window.UltraVid = window.UltraVid || {};
       container.innerHTML = getSkeletonMarkup(4);
     }
 
+    if (window.telemetry) {
+      window.telemetry.emit('REFRESH', 'info', `optimisticRefresh starting [${key}]`, {
+        category: key,
+        existingCards: existingCards,
+        epoch: thisEpoch,
+        seed: state.seed
+      });
+    }
+
     try {
       const resp = (window.ApiService && typeof window.ApiService.getFeed === 'function')
         ? await window.ApiService.getFeed(categoryParam, 1, 12, {
@@ -1048,6 +1100,13 @@ window.UltraVid = window.UltraVid || {};
       if (thisEpoch !== state.epoch) return;
 
       const rawItems = (resp && Array.isArray(resp.results)) ? resp.results : [];
+      const titles = rawItems.slice(0, 2).map(it => it.title || it.id || '');
+      if (window.telemetry) {
+        window.telemetry.emit('FETCH', 'info', `optimisticRefresh response [${key}]`, {
+          count: rawItems.length,
+          firstTwoTitles: titles
+        });
+      }
 
       if (rawItems.length > 0 && container) {
         // Reset category state machine for fresh epoch
@@ -1083,6 +1142,15 @@ window.UltraVid = window.UltraVid || {};
         refreshIcons();
         prefetchThumbnails(rawItems);
 
+        const cardsAfter = container.querySelectorAll('.card:not(.skeleton-card)').length;
+        if (window.telemetry) {
+          window.telemetry.emit('DOM', 'info', `optimisticRefresh ATOMIC SWAP complete [${key}]`, {
+            cardsBefore: existingCards,
+            swappedCount: rawItems.length,
+            cardsAfter: cardsAfter
+          });
+        }
+
         window.scrollTo({ top: 0, behavior: 'smooth' });
         if (isKeyActive(key)) {
           updateCardObserver(key);
@@ -1097,7 +1165,15 @@ window.UltraVid = window.UltraVid || {};
         showFeedError(container, key);
       }
     } catch (e) {
-      if (e && (e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort')))) {
+      const isAbort = e && (e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort')));
+      if (window.telemetry) {
+        window.telemetry.emit('REFRESH', isAbort ? 'info' : 'error', `optimisticRefresh error [${key}]`, {
+          errorName: e ? e.name : 'Unknown',
+          errorMessage: e ? e.message : String(e),
+          isAbort: Boolean(isAbort)
+        });
+      }
+      if (isAbort) {
         console.log(`[FeedEngine] Clean refresh abort for [${key}]`);
         return; // SILENTLY RETURN - DO NOT SHOW ERROR
       }
@@ -1105,6 +1181,9 @@ window.UltraVid = window.UltraVid || {};
       // If real cards are already visible, DO NOT show an ugly full banner
       const currentCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
       if (currentCards === 0 && container) {
+        if (window.telemetry) {
+          window.telemetry.emit('STATE', 'warn', `showFeedError triggered in optimisticRefresh [${key}]`, { currentCards: 0 });
+        }
         showFeedError(container, key);
       }
     } finally {
