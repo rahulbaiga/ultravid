@@ -94,6 +94,32 @@ window.UltraVid = window.UltraVid || {};
     return document.getElementById('grid-search') || document.getElementById('grid-all');
   }
 
+  function getOrCreateInfiniteLoader() {
+    let loader = document.getElementById('infiniteLoaderWrapper');
+    if (!loader) {
+      loader = document.createElement('div');
+      loader.id = 'infiniteLoaderWrapper';
+      loader.className = 'infinite-loader-wrapper';
+      loader.innerHTML = `
+        <svg class="infinite-spinner" viewBox="25 25 50 50">
+          <circle cx="50" cy="50" r="20" fill="none"></circle>
+        </svg>
+      `;
+      const wrap = document.getElementById('feed-containers-wrap') || document.body;
+      const sentinel = document.getElementById('homeSentinel');
+      if (sentinel && sentinel.parentNode === wrap) {
+        wrap.insertBefore(loader, sentinel);
+      } else {
+        wrap.appendChild(loader);
+      }
+    }
+    const sentinel = getActiveSentinel();
+    if (sentinel && sentinel.parentNode && (loader.parentNode !== sentinel.parentNode || loader.nextSibling !== sentinel)) {
+      sentinel.parentNode.insertBefore(loader, sentinel);
+    }
+    return loader;
+  }
+
   function clearErrorBanners(container) {
     const root = container || document;
     try {
@@ -348,9 +374,15 @@ window.UltraVid = window.UltraVid || {};
       }
     }, timeoutDuration);
 
+    // Only show spinner for deep pagination (page > 1) to avoid flashing during initial load
+    if (targetPage > 1) {
+      const loader = getOrCreateInfiniteLoader();
+      if (loader) loader.classList.add('active');
+    }
+
     const sentinel = getActiveSentinel();
-    if (sentinel && state.queue.length === 0 && isKeyActive(key)) {
-      sentinel.textContent = 'Loading more videos…';
+    if (sentinel) {
+      sentinel.textContent = '';
     }
 
     const categoryParam = key === 'trending' ? 'trending' : key;
@@ -390,7 +422,9 @@ window.UltraVid = window.UltraVid || {};
         state.page = targetPage + 1;
         if (state.emptyCount >= 4) {
           state.hasMore = false;
-          if (sentinel && isKeyActive(key)) sentinel.textContent = 'No more videos';
+          const loader = document.getElementById('infiniteLoaderWrapper');
+          if (loader) loader.classList.remove('active');
+          if (sentinel && isKeyActive(key)) sentinel.textContent = '';
         } else {
           setTimeout(() => {
             if (state.hasMore && !state.isFetching && isKeyActive(key)) {
@@ -476,7 +510,9 @@ window.UltraVid = window.UltraVid || {};
       }
       if (state.emptyCount >= 4) {
         state.hasMore = false;
-        if (sentinel && isKeyActive(key)) sentinel.textContent = 'No more videos';
+        const loader = document.getElementById('infiniteLoaderWrapper');
+        if (loader) loader.classList.remove('active');
+        if (sentinel && isKeyActive(key)) sentinel.textContent = '';
       } else {
         setTimeout(() => {
           if (state.hasMore && !state.isFetching && isKeyActive(key)) {
@@ -494,7 +530,13 @@ window.UltraVid = window.UltraVid || {};
       }
       clearTimeout(watchdog);
       clearTimeout(safetyTimers[key]);
-      if (state.queue.length > 0 && sentinel && state.hasMore && isKeyActive(key)) {
+
+      const loader = document.getElementById('infiniteLoaderWrapper');
+      if (loader) {
+        loader.classList.remove('active');
+      }
+
+      if (sentinel && isKeyActive(key)) {
         sentinel.textContent = '';
       }
     }
@@ -1068,6 +1110,8 @@ window.UltraVid = window.UltraVid || {};
     const container = document.getElementById(state.elId);
     if (container) clearErrorBanners(container);
     clearErrorBanners(document);
+    const loader = document.getElementById('infiniteLoaderWrapper');
+    if (loader) loader.classList.remove('active');
 
     // Zero-Blackout: Keep existing cards visible while in-flight.
     // If container was completely empty, show skeletons

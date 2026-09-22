@@ -191,15 +191,67 @@ header.chrome-hidden-top ~ main .chips {
   #watchGrid{grid-template-columns:2fr 1fr!important}
 }
 .feed-sentinel {
-  min-height: 50px;
+  height: 1px;
+  min-height: 1px;
   width: 100%;
+  padding: 0;
+  margin: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Infinite Scroll Footer Spinner */
+.infinite-loader-wrapper {
   display: flex;
-  align-items: center;
   justify-content: center;
-  color: #666666;
-  font-size: 13px;
-  padding: 16px;
-  text-align: center;
+  align-items: center;
+  width: 100%;
+  padding: 24px 0 40px 0;
+  min-height: 48px;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.infinite-loader-wrapper.active {
+  visibility: visible;
+  opacity: 1;
+}
+
+.infinite-spinner {
+  width: 32px;
+  height: 32px;
+  animation: infinite-spin 1.1s linear infinite;
+}
+
+.infinite-spinner circle {
+  stroke: #ff0033; /* UltraVid YouTube red accent */
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 80, 200;
+  stroke-dashoffset: 0;
+  animation: infinite-dash 1.4s ease-in-out infinite;
+}
+
+@keyframes infinite-spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes infinite-dash {
+  0% {
+    stroke-dasharray: 1, 200;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 90, 200;
+    stroke-dashoffset: -35px;
+  }
+  100% {
+    stroke-dasharray: 90, 200;
+    stroke-dashoffset: -125px;
+  }
 }
 
 /* Authentic YouTube Shimmer Wave Animation */
@@ -409,6 +461,11 @@ select{background:#272727;color:#fff;border:0;border-radius:8px;padding:6px}
       <div id="grid-comedy" class="category-feed media-feed-grid hidden"></div>
       <div id="grid-food" class="category-feed media-feed-grid hidden"></div>
       <div id="grid-search" class="category-feed media-feed-grid hidden"></div>
+    </div>
+    <div id="infiniteLoaderWrapper" class="infinite-loader-wrapper">
+      <svg class="infinite-spinner" viewBox="25 25 50 50">
+        <circle cx="50" cy="50" r="20" fill="none"></circle>
+      </svg>
     </div>
     <div id="homeSentinel" class="feed-sentinel"></div>
   </section>
