@@ -62,7 +62,12 @@ def extract_all_qualities(video_id: str):
     url = f"https://www.youtube.com/watch?v={clean_id}"
     formats = []
     title = ""
+    channel = ""
     duration = 0
+    description = ""
+    view_count = 0
+    like_count = 0
+    upload_date = ""
     hls_url = None
 
     # 1. First query InnerTube fast_player_sync (bypasses YouTube datacenter/bot blocks)
@@ -71,14 +76,19 @@ def extract_all_qualities(video_id: str):
         turbo = fast_player_sync(clean_id)
         if turbo:
             title = turbo.get("title") or title
+            channel = turbo.get("channel") or turbo.get("uploader") or channel
             duration = turbo.get("duration") or duration
+            description = turbo.get("description") or description
+            view_count = turbo.get("view_count") or view_count
+            like_count = turbo.get("like_count") or like_count
+            upload_date = turbo.get("upload_date") or upload_date
             for s in (turbo.get("progressive_streams", []) + turbo.get("video_streams", [])):
                 formats.append(s)
     except Exception:
         pass
 
-    # 2. Fallback to yt_dlp if needed
-    if not formats:
+    # 2. Fallback to yt_dlp if needed (or to enrich metadata if missing)
+    if not formats or not description:
         try:
             ydl_opts = {
                 'format': 'bestvideo+bestaudio/best',
@@ -92,10 +102,16 @@ def extract_all_qualities(video_id: str):
             import yt_dlp
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                formats = info.get('formats', [])
-                hls_url = info.get('manifest_url') or info.get('hls_manifest_url')
-                title = info.get('title') or title
-                duration = info.get('duration') or duration
+                if not formats:
+                    formats = info.get('formats', [])
+                hls_url = hls_url or info.get('manifest_url') or info.get('hls_manifest_url')
+                title = title or info.get('title')
+                channel = channel or info.get('uploader') or info.get('channel')
+                duration = duration or info.get('duration')
+                description = description or info.get('description', '') or ''
+                view_count = view_count or info.get('view_count', 0)
+                like_count = like_count or info.get('like_count', 0)
+                upload_date = upload_date or info.get('upload_date', '') or info.get('release_date', '')
         except Exception:
             pass
 
@@ -148,7 +164,12 @@ def extract_all_qualities(video_id: str):
     return {
         "id": clean_id,
         "title": title,
+        "channel": channel,
         "duration": duration,
+        "description": description,
+        "view_count": view_count,
+        "like_count": like_count,
+        "upload_date": upload_date,
         "hls_manifest": hls_url,
         "qualities": sorted_qualities,
         "default_stream": sorted_qualities[0]["url"]

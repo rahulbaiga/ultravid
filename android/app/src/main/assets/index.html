@@ -663,53 +663,121 @@ body.watch-route-active main.wrap {
   background: rgba(255, 255, 255, 0.18);
 }
 
-/* 5. Comments Teaser Card */
-.watch-comments-teaser {
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  padding: 10px 12px;
-  margin: 12px 14px 16px 14px;
-  cursor: pointer;
-  transition: background 0.15s ease;
+/* Read-Only Segmented Pill */
+.action-pill-segmented.read-only-pill {
+  pointer-events: none;
+  user-select: none;
+  cursor: default;
 }
-.watch-comments-teaser:active {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.comments-teaser-header {
-  display: flex;
+.action-pill-segmented .pill-stat-item {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.comments-teaser-title {
-  font-size: 13px;
-  font-weight: 600;
+  gap: 6px;
+  padding: 0 12px;
   color: #f1f1f1;
-}
-.comments-teaser-count {
-  font-size: 12px;
-  color: #aaaaaa;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.comments-teaser-preview {
+/* YouTube Description Bottom Sheet */
+.desc-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.desc-modal-overlay.active {
+  visibility: visible;
+  opacity: 1;
+}
+
+.desc-modal-sheet {
+  background: #212121;
+  border-radius: 16px 16px 0 0;
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 0.28s cubic-bezier(0.1, 0.9, 0.2, 1);
+  overflow: hidden;
+}
+
+.desc-modal-overlay.active .desc-modal-sheet {
+  transform: translateY(0);
+}
+
+.desc-sheet-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.comments-user-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #3a3a3a;
-  flex-shrink: 0;
+
+.desc-sheet-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
 }
-.comments-preview-text {
+
+.desc-close-btn {
+  background: transparent;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.desc-close-btn:active {
+  color: #fff;
+}
+
+.desc-sheet-content {
+  padding: 16px 18px 32px 18px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.desc-content-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.desc-content-meta {
   font-size: 12px;
-  color: #dcdcdc;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: #aaa;
+  margin-bottom: 12px;
+}
+
+.desc-content-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin-bottom: 14px;
+}
+
+.desc-content-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d1d1d1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* 6. Up Next Section */
@@ -1001,6 +1069,27 @@ body.watch-route-active main.wrap {
       <button type="button" id="qualityCloseBtn" class="clear-btn" style="font-size:16px">✕</button>
     </div>
     <div id="qualityOptionsList" class="quality-options-container"></div>
+  </div>
+</div>
+
+<!-- Description Bottom Sheet Modal -->
+<div id="descriptionOverlay" class="desc-modal-overlay">
+  <div class="desc-modal-sheet">
+    <div class="desc-sheet-header">
+      <h3>Description</h3>
+      <button id="closeDescBtn" class="desc-close-btn" aria-label="Close Description">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <div class="desc-sheet-content">
+      <div id="descSheetTitle" class="desc-content-title"></div>
+      <div id="descSheetMeta" class="desc-content-meta"></div>
+      <div class="desc-content-divider"></div>
+      <div id="descSheetBody" class="desc-content-body"></div>
+    </div>
   </div>
 </div>
 

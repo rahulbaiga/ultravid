@@ -311,7 +311,7 @@ def _parse_player(data: Dict[str, Any], video_id: str) -> Dict[str, Any]:
         vc = int(vd.get("viewCount")) if vd.get("viewCount") else None
     except Exception:
         vc = None
-    return {"title": vd.get("title"), "duration": dur, "duration_string": dur_str, "thumbnail": _thumb(thumbs), "uploader": vd.get("author"), "channel": vd.get("author"), "view_count": vc, "like_count": None, "webpage_url": f"https://www.youtube.com/watch?v={video_id}", "extractor": "innertube", "resolutions": sorted(list(res_set), key=lambda r: int(r.replace("p", "")) if r.replace("p", "").isdigit() else 0), "video_streams": video_streams, "audio_streams": audio_streams, "progressive_streams": progressive, "playable_streams": playable, "default_play_url": default_url}
+    return {"title": vd.get("title"), "duration": dur, "duration_string": dur_str, "thumbnail": _thumb(thumbs), "uploader": vd.get("author"), "channel": vd.get("author"), "view_count": vc, "like_count": None, "webpage_url": f"https://www.youtube.com/watch?v={video_id}", "extractor": "innertube", "resolutions": sorted(list(res_set), key=lambda r: int(r.replace("p", "")) if r.replace("p", "").isdigit() else 0), "video_streams": video_streams, "audio_streams": audio_streams, "progressive_streams": progressive, "playable_streams": playable, "default_play_url": default_url, "description": vd.get("shortDescription") or ""}
 
 async def fast_player(video_id: str) -> Dict[str, Any]:
     c = _aconfig_client()

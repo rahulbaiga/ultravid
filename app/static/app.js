@@ -129,6 +129,19 @@
       return;
     }
 
+    // 2d. If description overlay modal is open, dismiss modal
+    const descOverlay = document.getElementById('descriptionOverlay');
+    if (descOverlay && descOverlay.classList.contains('active')) {
+      const player = window.UltraVid && window.UltraVid.player;
+      if (player && typeof player.closeDescriptionSheet === 'function') {
+        player.closeDescriptionSheet();
+      } else {
+        descOverlay.classList.remove('active');
+        document.body.style.overflow = '';
+      }
+      return;
+    }
+
     // 3. If watch player is open, close player and restore feed
     const playerComp = window.UltraVid && window.UltraVid.player;
     const watchView = document.getElementById('watchView');
@@ -201,6 +214,8 @@
     if (dlOverlay && !dlOverlay.classList.contains('hidden')) return false;
     const qualityOverlay = document.getElementById('qualityOverlay');
     if (qualityOverlay && !qualityOverlay.classList.contains('hidden')) return false;
+    const descOverlay = document.getElementById('descriptionOverlay');
+    if (descOverlay && descOverlay.classList.contains('active')) return false;
     return true;
   }
 

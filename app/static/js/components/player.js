@@ -23,9 +23,6 @@ window.UltraVid = window.UltraVid || {};
   let playerErrorOverlay = null;
   let playerRetryBtn = null;
   let playerErrorMsg = null;
-  let likeBtn = null;
-  let likeCount = null;
-  let dislikeBtn = null;
   let shareBtn = null;
   let dlOverlay = null;
   let dlSheet = null;
@@ -37,9 +34,6 @@ window.UltraVid = window.UltraVid || {};
   let currentData = null;
   let currentUrl = "";
   let isWatchOpen = false;
-  let liked = false;
-  let disliked = false;
-  let likeN = 0;
   let downloadPollTimer = null;
 
   // Tokenized Invalidation Pattern (Request Generation Counter)
@@ -77,6 +71,24 @@ window.UltraVid = window.UltraVid || {};
         if (e.target === qOverlay) closeQualityPicker();
       };
     }
+
+    const descOverlay = document.getElementById("descriptionOverlay");
+    const descClose = document.getElementById("closeDescBtn");
+    if (descClose) descClose.onclick = closeDescriptionSheet;
+    if (descOverlay) {
+      descOverlay.onclick = (e) => {
+        if (e.target === descOverlay) closeDescriptionSheet();
+      };
+    }
+  }
+
+  function formatLikeCount(count) {
+    if (!count || count === 'Like') return 'Like';
+    const num = parseInt(count, 10);
+    if (isNaN(num)) return count;
+    if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return num.toString();
   }
 
   function renderWatchView(container, videoData) {
@@ -131,7 +143,6 @@ window.UltraVid = window.UltraVid || {};
             <span id="wDate">${uploadDate}</span>
             <span class="meta-more-btn" id="metaMoreBtn">...more</span>
           </div>
-          <div id="watchDescription" class="watch-description hidden" style="font-size:12px;color:#ccc;line-height:1.4;margin:8px 0;background:rgba(255,255,255,0.05);padding:10px 12px;border-radius:8px;white-space:pre-wrap;"></div>
 
           <!-- 3. Channel Row -->
           <div class="watch-channel-row">
@@ -148,15 +159,19 @@ window.UltraVid = window.UltraVid || {};
 
           <!-- 4. Action Pills Bar -->
           <div class="watch-action-bar">
-            <div class="action-pill-segmented">
-              <button id="likeBtn">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
-                <span id="likeCount">${likes}</span>
-              </button>
+            <div class="action-pill-segmented read-only-pill" title="Likes">
+              <div class="pill-stat-item">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+                </svg>
+                <span id="watchLikeCount">${formatLikeCount(videoData.likes || videoData.like_count)}</span>
+              </div>
               <div class="segment-divider"></div>
-              <button id="dislikeBtn">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path></svg>
-              </button>
+              <div class="pill-stat-item">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path>
+                </svg>
+              </div>
             </div>
 
             <button class="action-pill" id="shareBtn">
@@ -176,19 +191,7 @@ window.UltraVid = window.UltraVid || {};
           </div>
         </div>
 
-        <!-- 5. Comments Teaser Card -->
-        <div class="watch-comments-teaser" id="commentsTeaserCard">
-          <div class="comments-teaser-header">
-            <span class="comments-teaser-title">Comments</span>
-            <span class="comments-teaser-count">${videoData.comment_count ? fmtViews(videoData.comment_count) : '80'}</span>
-          </div>
-          <div class="comments-teaser-preview">
-            <div class="comments-user-avatar"></div>
-            <span class="comments-preview-text">${escapeHtml(videoData.top_comment || 'Amazing high quality video! Thanks for sharing this.')}</span>
-          </div>
-        </div>
-
-        <!-- 6. Up Next Section (Lightweight Placeholder - 0 Initial Network Calls) -->
+        <!-- 5. Up Next Section (Lightweight Placeholder - 0 Initial Network Calls) -->
         <div class="watch-up-next-section">
           <div class="up-next-heading">Up next</div>
           <div id="upNextContainer">
@@ -220,14 +223,11 @@ window.UltraVid = window.UltraVid || {};
     playerErrorOverlay = document.getElementById("playerErrorOverlay");
     playerRetryBtn = document.getElementById("playerRetryBtn");
     playerErrorMsg = document.getElementById("playerErrorMsg");
-    likeBtn = document.getElementById("likeBtn");
-    likeCount = document.getElementById("likeCount");
-    dislikeBtn = document.getElementById("dislikeBtn");
     shareBtn = document.getElementById("shareBtn");
     const downloadActionBtn = document.getElementById("downloadActionBtn");
     const qualitySelectorBtn = document.getElementById("qualitySelectorBtn");
-    const commentsTeaserCard = document.getElementById("commentsTeaserCard");
     const metaMoreBtn = document.getElementById("metaMoreBtn");
+    const wMeta = document.getElementById("wMeta");
 
     if (videoEl) {
       videoEl.addEventListener("waiting", () => {
@@ -276,34 +276,6 @@ window.UltraVid = window.UltraVid || {};
       };
     }
 
-
-    if (likeBtn) {
-      likeBtn.onclick = () => {
-        liked = !liked;
-        if (liked) {
-          disliked = false;
-          if (dislikeBtn) dislikeBtn.classList.remove("active");
-          likeBtn.classList.add("active");
-          if (likeCount) likeCount.textContent = fmtViews(likeN + 1);
-        } else {
-          likeBtn.classList.remove("active");
-          if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
-        }
-      };
-    }
-
-    if (dislikeBtn) {
-      dislikeBtn.onclick = () => {
-        disliked = !disliked;
-        dislikeBtn.classList.toggle("active", disliked);
-        if (disliked) {
-          liked = false;
-          if (likeBtn) likeBtn.classList.remove("active");
-          if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
-        }
-      };
-    }
-
     if (shareBtn) {
       shareBtn.onclick = async () => {
         const sUrl = currentUrl || window.location.href;
@@ -330,26 +302,58 @@ window.UltraVid = window.UltraVid || {};
       qualitySelectorBtn.onclick = () => openQualityPicker();
     }
 
-    if (commentsTeaserCard) {
-      commentsTeaserCard.onclick = () => {
-        showToast('Comments feature coming soon!');
+    if (metaMoreBtn) {
+      metaMoreBtn.onclick = (e) => {
+        e.stopPropagation();
+        openDescriptionSheet(currentData || {});
       };
     }
 
-    if (metaMoreBtn) {
-      metaMoreBtn.onclick = () => {
-        const descEl = document.getElementById('watchDescription');
-        if (!descEl) return;
-        const isHidden = descEl.classList.contains('hidden');
-        if (isHidden) {
-          descEl.textContent = (currentData && currentData.description) ? currentData.description : 'No additional description provided.';
-          descEl.classList.remove('hidden');
-          metaMoreBtn.textContent = 'Show less';
-        } else {
-          descEl.classList.add('hidden');
-          metaMoreBtn.textContent = '...more';
-        }
+    if (wMeta) {
+      wMeta.onclick = () => {
+        openDescriptionSheet(currentData || {});
       };
+    }
+  }
+
+  function openDescriptionSheet(videoData) {
+    const overlay = document.getElementById('descriptionOverlay');
+    const titleEl = document.getElementById('descSheetTitle');
+    const metaEl = document.getElementById('descSheetMeta');
+    const textEl = document.getElementById('descSheetBody');
+
+    const v = videoData || currentData || {};
+    const title = v.title || currentData?.title || 'Video';
+    const channel = v.channel || v.uploader || currentData?.channel || currentData?.uploader || 'Channel';
+    const views = v.views
+      ? (typeof v.views === 'string' && v.views.includes('views') ? v.views : `${v.views} views`)
+      : (v.view_count ? `${fmtViews(v.view_count)} views` : (currentData?.views ? `${currentData.views} views` : (currentData?.view_count ? `${fmtViews(currentData.view_count)} views` : 'Popular')));
+    const uploadDate = v.upload_date || v.uploaded || currentData?.upload_date || currentData?.uploaded || 'Recently';
+    const desc = v.description || currentData?.description || 'No description available for this video.';
+
+    if (titleEl) titleEl.textContent = title;
+    if (metaEl) {
+      metaEl.innerHTML = `
+        <span>${escapeHtml(channel)}</span> • 
+        <span>${escapeHtml(views)}</span> • 
+        <span>${escapeHtml(uploadDate)}</span>
+      `;
+    }
+    if (textEl) {
+      textEl.textContent = desc;
+    }
+
+    if (overlay) {
+      overlay.classList.add('active');
+      document.body.style.overflow = 'hidden';
+    }
+  }
+
+  function closeDescriptionSheet() {
+    const overlay = document.getElementById('descriptionOverlay');
+    if (overlay) {
+      overlay.classList.remove('active');
+      document.body.style.overflow = '';
     }
   }
 
@@ -601,13 +605,11 @@ window.UltraVid = window.UltraVid || {};
     if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
     hidePlayerErrorState();
 
-    // Reset interactive controls
-    liked = false;
-    disliked = false;
-    likeN = preview && preview.like_count ? (parseInt(preview.like_count) || 0) : 0;
-    if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
-    if (likeBtn) likeBtn.classList.remove("active");
-    if (dislikeBtn) dislikeBtn.classList.remove("active");
+    // Update read-only like stat pill if preview has count
+    const likeEl = document.getElementById("watchLikeCount");
+    if (likeEl && preview && (preview.likes || preview.like_count)) {
+      likeEl.textContent = formatLikeCount(preview.likes || preview.like_count);
+    }
 
     window.scrollTo({ top: 0, behavior: "instant" });
     refreshIcons();
@@ -627,18 +629,38 @@ window.UltraVid = window.UltraVid || {};
     const qLabel = document.getElementById("activeQualityLabel");
     if (qLabel) qLabel.textContent = `${activeH}p`;
 
-    // Dynamic multi-resolution YouTube stream resolver
+    // Dynamic multi-resolution YouTube stream resolver & description metadata sync
     const vidId = d.id || extractVideoId(url, d);
     if (vidId) {
       fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}`)
         .then(res => res.json())
         .then(resData => {
           if (thisToken !== null && thisToken !== currentPlaybackToken) return;
-          if (resData && resData.qualities && resData.qualities.length) {
-            populateQualitySheet(resData.qualities, activeH);
-            const matched = resData.qualities.find(q => q.height === activeH) || resData.qualities[0];
-            if (matched && qLabel) {
-              qLabel.textContent = matched.resolution;
+          if (resData) {
+            if (resData.description && (!currentData || !currentData.description)) {
+              if (currentData) currentData.description = resData.description;
+            }
+            if (resData.like_count) {
+              if (currentData) currentData.like_count = resData.like_count;
+              const likeEl = document.getElementById("watchLikeCount");
+              if (likeEl) likeEl.textContent = formatLikeCount(resData.like_count);
+            }
+            if (resData.view_count && (!currentData || !currentData.view_count)) {
+              if (currentData) currentData.view_count = resData.view_count;
+              const viewsEl = document.getElementById("wViews");
+              if (viewsEl) viewsEl.textContent = `${fmtViews(resData.view_count)} views`;
+            }
+            if (resData.upload_date && (!currentData || !currentData.upload_date)) {
+              if (currentData) currentData.upload_date = resData.upload_date;
+              const dateEl = document.getElementById("wDate");
+              if (dateEl) dateEl.textContent = resData.upload_date;
+            }
+            if (resData.qualities && resData.qualities.length) {
+              populateQualitySheet(resData.qualities, activeH);
+              const matched = resData.qualities.find(q => q.height === activeH) || resData.qualities[0];
+              if (matched && qLabel) {
+                qLabel.textContent = matched.resolution;
+              }
             }
           }
         })
@@ -685,12 +707,10 @@ window.UltraVid = window.UltraVid || {};
     const dateEl = document.getElementById("wDate");
     if (dateEl) dateEl.textContent = d.upload_date || d.uploaded || "Recently";
 
-    liked = false;
-    disliked = false;
-    likeN = parseInt(d.like_count) || 0;
-    if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
-    if (likeBtn) likeBtn.classList.remove("active");
-    if (dislikeBtn) dislikeBtn.classList.remove("active");
+    const likeEl = document.getElementById("watchLikeCount");
+    if (likeEl && (d.likes || d.like_count)) {
+      likeEl.textContent = formatLikeCount(d.like_count || d.likes);
+    }
 
     refreshIcons();
 
@@ -763,6 +783,8 @@ window.UltraVid = window.UltraVid || {};
       currentBufferCheckCleanup = null;
     }
 
+    closeDescriptionSheet();
+    closeQualityPicker();
     document.body.classList.remove('watch-route-active');
 
     const player = document.getElementById("mainVideoPlayer") || document.getElementById("mainVideo") || videoEl;
@@ -1032,6 +1054,8 @@ window.UltraVid = window.UltraVid || {};
     switchQuality,
     openQualityPicker,
     closeQualityPicker,
+    openDescriptionSheet,
+    closeDescriptionSheet,
     openDownloads,
     closeDownloads,
     startDownload,
