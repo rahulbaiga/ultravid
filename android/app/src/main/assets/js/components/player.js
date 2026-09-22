@@ -35,13 +35,20 @@ window.UltraVid = window.UltraVid || {};
   let isWatchOpen = false;
   let downloadPollTimer = null;
 
-  // Tokenized Invalidation Pattern (Request Generation Counter)
   let currentPlaybackToken = 0;
   let lastFailedItem = null;
   let currentBufferCheckCleanup = null;
   let customPlayerCleanup = null;
   let currentAvailableQualities = [];
   let activeQualityIndex = 0;
+
+  // YouTube Mobile Queue & Settings State
+  let playbackHistory = [];
+  let currentVideoItem = null;
+  let autoplayEnabled = true;
+  let isLoopEnabled = false;
+  let isScreenLocked = false;
+  let currentPlaybackRate = 1.0;
 
   function showBufferSpinner() {
     const s = document.getElementById("playerBufferSpinner") || playerSpinner;
@@ -124,14 +131,19 @@ window.UltraVid = window.UltraVid || {};
             <source src="${videoData.stream_url || videoData.url || ''}" type="video/mp4">
           </video>
 
-          <!-- 2. Single Centered YouTube Red Buffer Spinner -->
+          <!-- Screen Lock Barrier -->
+          <div class="screen-locked-barrier" id="screenLockBarrier"></div>
+          <button class="unlock-toast-btn" id="unlockToastBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <span>Tap to unlock</span>
+          </button>
+
+          <!-- Buffer Spinner -->
           <div class="player-buffer-spinner" id="playerBufferSpinner">
-            <svg viewBox="25 25 50 50">
-              <circle cx="50" cy="50" r="20" fill="none"></circle>
-            </svg>
+            <svg viewBox="25 25 50 50"><circle cx="50" cy="50" r="20" fill="none"></circle></svg>
           </div>
 
-          <!-- 3. Gesture Zones (Double-Tap Skip) -->
+          <!-- Gesture Zones for Double-Tap Skip -->
           <div class="gesture-zone left" id="gestureZoneLeft">
             <div class="skip-indicator" id="skipIndicatorLeft">◄◄ 10s</div>
           </div>
@@ -139,32 +151,40 @@ window.UltraVid = window.UltraVid || {};
             <div class="skip-indicator" id="skipIndicatorRight">10s ►►</div>
           </div>
 
-          <!-- 4. Floating Top Back Button -->
-          <button class="player-floating-back" id="playerBackBtn" aria-label="Back">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="19" y1="12" x2="5" y2="12"></line>
-              <polyline points="12 19 5 12 12 5"></polyline>
-            </svg>
-          </button>
-
-          <!-- 5. Custom Overlay & Controls -->
+          <!-- Custom Controls Overlay -->
           <div class="custom-player-overlay visible" id="customPlayerOverlay">
-            <div></div> <!-- Spacer for top alignment -->
+            <!-- Top Chrome: Back + Autoplay + Settings Gear -->
+            <div class="player-top-chrome">
+              <button class="player-floating-back" id="playerBackBtn" aria-label="Back">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+              </button>
+              <div class="player-top-actions">
+                <div class="autoplay-toggle-pill active" id="autoplayTogglePill" title="Autoplay">
+                  <div class="autoplay-toggle-thumb">
+                    <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
+                  </div>
+                </div>
+                <button class="player-gear-btn" id="playerGearBtn" aria-label="Settings">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
+              </div>
+            </div>
 
-            <!-- Center Play/Pause Button -->
-            <div class="player-center-controls">
-              <button class="center-play-btn" id="centerPlayPauseBtn" aria-label="Play/Pause">
-                <svg id="playIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                <svg id="pauseIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
-                  <rect x="6" y="4" width="4" height="16"></rect>
-                  <rect x="14" y="4" width="4" height="16"></rect>
-                </svg>
+            <!-- Center Trio: Prev / Play-Pause / Next -->
+            <div class="player-center-trio">
+              <button class="player-trio-btn nav-disabled" id="prevVideoBtn" aria-label="Previous video">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2.5"></line></svg>
+              </button>
+              <button class="player-trio-btn center-play-main" id="centerPlayPauseBtn" aria-label="Play/Pause">
+                <svg id="playIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <svg id="pauseIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+              </button>
+              <button class="player-trio-btn" id="nextVideoBtn" aria-label="Next video">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2.5"></line></svg>
               </button>
             </div>
 
-            <!-- Bottom Bar (Red Scrubber & Timers) -->
+            <!-- Bottom Scrubber Bar -->
             <div class="player-bottom-bar">
               <div class="player-timeline-container" id="playerTimeline">
                 <div class="timeline-track-bg">
@@ -174,21 +194,17 @@ window.UltraVid = window.UltraVid || {};
                 </div>
               </div>
               <div class="player-bottom-row">
-                <div class="player-time-display">
-                  <span id="currentTimeLabel">0:00</span> / <span id="durationLabel">0:00</span>
-                </div>
+                <div class="player-time-display"><span id="currentTimeLabel">0:00</span> / <span id="durationLabel">0:00</span></div>
                 <div class="player-right-btns">
                   <button class="player-mini-btn" id="playerFullscreenBtn" aria-label="Fullscreen">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-                    </svg>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
                   </button>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- 6. In-DOM Error & Retry Overlay -->
+          <!-- In-DOM Error & Retry Overlay -->
           <div id="playerErrorOverlay" class="player-error-overlay hidden">
             <div class="player-error-icon" style="font-size:28px">⚠️</div>
             <div id="playerErrorMsg" class="player-error-msg" style="font-size:14px;color:#eee">An error occurred. Please try again.</div>
@@ -244,11 +260,6 @@ window.UltraVid = window.UltraVid || {};
             <button class="action-pill" id="downloadActionBtn">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
               <span>Download</span>
-            </button>
-
-            <button class="action-pill" id="qualitySelectorBtn">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-              <span id="activeQualityLabel">720p</span>
             </button>
           </div>
         </div>
@@ -373,6 +384,8 @@ window.UltraVid = window.UltraVid || {};
 
     video.addEventListener('play', () => {
       updatePlayPauseIcons();
+      if (currentPlaybackRate !== 1.0) video.playbackRate = currentPlaybackRate;
+      if (isLoopEnabled) video.loop = isLoopEnabled;
       resetHideTimer();
     });
 
@@ -518,7 +531,7 @@ window.UltraVid = window.UltraVid || {};
 
     // Tap on overlay background toggles overlay
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay || e.target.classList.contains('player-center-controls')) {
+      if (e.target === overlay || e.target.classList.contains('player-center-controls') || e.target.classList.contains('player-center-trio')) {
         toggleOverlay();
       }
     });
@@ -558,9 +571,245 @@ window.UltraVid = window.UltraVid || {};
       window.removeEventListener('touchend', onTouchEnd);
     };
 
+    initSettingsMenu(video);
     updatePlayPauseIcons();
     updateDuration();
     showOverlay();
+  }
+
+  function updateNavButtonsState() {
+    const prevBtn = document.getElementById('prevVideoBtn');
+    if (!prevBtn) return;
+    if (playbackHistory.length > 0) {
+      prevBtn.classList.remove('nav-disabled');
+    } else {
+      prevBtn.classList.add('nav-disabled');
+    }
+  }
+
+  function playNextVideo() {
+    // Pick top item from Up Next container
+    const upNextCards = document.querySelectorAll('.up-next-card');
+    for (let i = 0; i < upNextCards.length; i++) {
+      const nextTarget = upNextCards[i];
+      const nextVidId = nextTarget.getAttribute('data-id');
+      if (nextVidId && (!currentVideoItem || nextVidId !== currentVideoItem.id)) {
+        if (currentVideoItem) playbackHistory.push(currentVideoItem);
+        updateNavButtonsState();
+        loadAndPlay(`https://www.youtube.com/watch?v=${nextVidId}`);
+        try {
+          history.pushState({ view: "watch", id: nextVidId }, "", "#watch/" + nextVidId);
+        } catch (e) {}
+        return;
+      }
+    }
+    // Fallback to feed cards if Up Next is empty
+    const feedCards = document.querySelectorAll('.card');
+    for (let i = 0; i < feedCards.length; i++) {
+      const vidId = feedCards[i].getAttribute('data-id');
+      if (vidId && (!currentVideoItem || vidId !== currentVideoItem.id)) {
+        if (currentVideoItem) playbackHistory.push(currentVideoItem);
+        updateNavButtonsState();
+        loadAndPlay(`https://www.youtube.com/watch?v=${vidId}`);
+        try {
+          history.pushState({ view: "watch", id: vidId }, "", "#watch/" + vidId);
+        } catch (e) {}
+        return;
+      }
+    }
+    console.log('[QUEUE] No more next videos in queue.');
+  }
+
+  function playPrevVideo() {
+    if (playbackHistory.length === 0) return;
+    const prevVideo = playbackHistory.pop();
+    updateNavButtonsState();
+    if (prevVideo) {
+      const vidId = prevVideo.id || extractVideoId(prevVideo.url, prevVideo);
+      if (vidId) {
+        loadAndPlay(prevVideo.url || `https://www.youtube.com/watch?v=${vidId}`);
+        try {
+          history.pushState({ view: "watch", id: vidId }, "", "#watch/" + vidId);
+        } catch (e) {}
+      }
+    }
+  }
+
+  function renderSpeedOptions(video) {
+    const speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+    const container = document.getElementById('speedOptionsList');
+    if (!container) return;
+    container.innerHTML = speeds.map(spd => {
+      const isSel = currentPlaybackRate === spd;
+      return `
+        <div class="quality-option-item ${isSel ? 'active' : ''}" data-spd="${spd}">
+          <div class="quality-option-left">
+            <span class="quality-label-text">${spd === 1.0 ? 'Normal' : spd + 'x'}</span>
+          </div>
+          ${isSel ? '<svg class="quality-check-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.quality-option-item').forEach(item => {
+      item.onclick = () => {
+        const spd = parseFloat(item.getAttribute('data-spd'));
+        currentPlaybackRate = spd;
+        if (video) video.playbackRate = spd;
+        const speedText = document.getElementById('settingsCurrentSpeedText');
+        if (speedText) speedText.textContent = spd === 1.0 ? 'Normal' : `${spd}x`;
+        const overlay = document.getElementById('playerSettingsOverlay');
+        if (overlay) overlay.classList.remove('active');
+        showToast(`Playback speed set to ${spd === 1.0 ? 'Normal' : spd + 'x'}`);
+      };
+    });
+  }
+
+  function initSettingsMenu(video) {
+    const overlay = document.getElementById('playerSettingsOverlay');
+    const gearBtn = document.getElementById('playerGearBtn');
+    const mainView = document.getElementById('settingsMainMenuView');
+    const qualView = document.getElementById('settingsQualitySubView');
+    const speedView = document.getElementById('settingsSpeedSubView');
+    const loopRail = document.getElementById('loopSwitchRail');
+    const lockRow = document.getElementById('menuRowLock');
+    const barrier = document.getElementById('screenLockBarrier');
+    const unlockBtn = document.getElementById('unlockToastBtn');
+    const autoPill = document.getElementById('autoplayTogglePill');
+
+    function openSettings() {
+      if (!overlay) return;
+      if (mainView) mainView.style.display = 'block';
+      if (qualView) qualView.style.display = 'none';
+      if (speedView) speedView.style.display = 'none';
+      overlay.classList.add('active');
+    }
+    function closeSettings() {
+      if (overlay) overlay.classList.remove('active');
+    }
+
+    if (gearBtn) gearBtn.onclick = (e) => { e.stopPropagation(); openSettings(); };
+    if (overlay) overlay.onclick = (e) => { if (e.target === overlay) closeSettings(); };
+
+    // Sub-navigation
+    const menuRowQuality = document.getElementById('menuRowQuality');
+    if (menuRowQuality) {
+      menuRowQuality.onclick = () => {
+        if (mainView) mainView.style.display = 'none';
+        if (qualView) qualView.style.display = 'block';
+      };
+    }
+    const subBackFromQuality = document.getElementById('subBackFromQuality');
+    if (subBackFromQuality) {
+      subBackFromQuality.onclick = () => {
+        if (qualView) qualView.style.display = 'none';
+        if (mainView) mainView.style.display = 'block';
+      };
+    }
+
+    const menuRowSpeed = document.getElementById('menuRowSpeed');
+    if (menuRowSpeed) {
+      menuRowSpeed.onclick = () => {
+        if (mainView) mainView.style.display = 'none';
+        if (speedView) speedView.style.display = 'block';
+        renderSpeedOptions(video);
+      };
+    }
+    const subBackFromSpeed = document.getElementById('subBackFromSpeed');
+    if (subBackFromSpeed) {
+      subBackFromSpeed.onclick = () => {
+        if (speedView) speedView.style.display = 'none';
+        if (mainView) mainView.style.display = 'block';
+      };
+    }
+
+    // Loop toggle
+    const menuRowLoop = document.getElementById('menuRowLoop');
+    if (menuRowLoop) {
+      menuRowLoop.onclick = () => {
+        isLoopEnabled = !isLoopEnabled;
+        video.loop = isLoopEnabled;
+        if (loopRail) loopRail.classList.toggle('active', isLoopEnabled);
+        showToast(isLoopEnabled ? 'Loop video is ON' : 'Loop video is OFF');
+      };
+    }
+    if (loopRail) {
+      loopRail.classList.toggle('active', isLoopEnabled);
+    }
+
+    // Autoplay toggle
+    if (autoPill) {
+      autoPill.classList.toggle('active', autoplayEnabled);
+      autoPill.onclick = (e) => {
+        e.stopPropagation();
+        autoplayEnabled = !autoplayEnabled;
+        autoPill.classList.toggle('active', autoplayEnabled);
+        showToast(autoplayEnabled ? 'Autoplay is ON' : 'Autoplay is OFF');
+      };
+    }
+
+    // Screen Lock
+    let lockToastTimer = null;
+    if (lockRow) {
+      lockRow.onclick = () => {
+        closeSettings();
+        isScreenLocked = true;
+        if (barrier) barrier.classList.add('active');
+        const customOverlay = document.getElementById('customPlayerOverlay');
+        if (customOverlay) customOverlay.classList.remove('visible');
+      };
+    }
+
+    if (barrier) {
+      barrier.onclick = () => {
+        if (!unlockBtn) return;
+        unlockBtn.classList.add('visible');
+        clearTimeout(lockToastTimer);
+        lockToastTimer = setTimeout(() => unlockBtn.classList.remove('visible'), 3000);
+      };
+    }
+
+    if (unlockBtn) {
+      unlockBtn.onclick = (e) => {
+        e.stopPropagation();
+        isScreenLocked = false;
+        if (barrier) barrier.classList.remove('active');
+        unlockBtn.classList.remove('visible');
+        const customOverlay = document.getElementById('customPlayerOverlay');
+        if (customOverlay) customOverlay.classList.add('visible');
+        showToast('Screen unlocked');
+      };
+    }
+
+    // Video Ended Autoplay listener
+    video.onended = () => {
+      if (autoplayEnabled && !isLoopEnabled) {
+        showToast('Autoplaying next video in 3s...');
+        setTimeout(() => {
+          if (autoplayEnabled && !isLoopEnabled && (video.ended || video.paused)) {
+            playNextVideo();
+          }
+        }, 3000);
+      }
+    };
+
+    // Previous / Next button bindings
+    const prevBtn = document.getElementById('prevVideoBtn');
+    if (prevBtn) {
+      prevBtn.onclick = (e) => {
+        e.stopPropagation();
+        playPrevVideo();
+      };
+    }
+    const nextBtn = document.getElementById('nextVideoBtn');
+    if (nextBtn) {
+      nextBtn.onclick = (e) => {
+        e.stopPropagation();
+        playNextVideo();
+      };
+    }
+
+    updateNavButtonsState();
   }
 
   function bindWatchEvents() {
@@ -571,7 +820,6 @@ window.UltraVid = window.UltraVid || {};
     playerErrorMsg = document.getElementById("playerErrorMsg");
     shareBtn = document.getElementById("shareBtn");
     const downloadActionBtn = document.getElementById("downloadActionBtn");
-    const qualitySelectorBtn = document.getElementById("qualitySelectorBtn");
     const metaMoreBtn = document.getElementById("metaMoreBtn");
     const wMeta = document.getElementById("wMeta");
 
@@ -615,10 +863,6 @@ window.UltraVid = window.UltraVid || {};
 
     if (downloadActionBtn) {
       downloadActionBtn.onclick = () => openDownloads();
-    }
-
-    if (qualitySelectorBtn) {
-      qualitySelectorBtn.onclick = () => openQualityPicker();
     }
 
     if (metaMoreBtn) {
@@ -727,6 +971,8 @@ window.UltraVid = window.UltraVid || {};
     relList.forEach(it => {
       const card = document.createElement("div");
       card.className = "up-next-card";
+      const vidId = it.id || extractVideoId(it.url, it);
+      if (vidId) card.setAttribute("data-id", vidId);
       const durBadge = (it.duration_string || (it.duration ? fmtDur(it.duration) : ''))
         ? `<span class="dur-badge">${it.duration_string || fmtDur(it.duration)}</span>`
         : '';
@@ -943,11 +1189,15 @@ window.UltraVid = window.UltraVid || {};
     const defUrl = rawUrl ? (rawUrl.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : "";
 
     const activeH = (playables[0] && playables[0].height) || 720;
-    const qLabel = document.getElementById("activeQualityLabel");
-    if (qLabel) qLabel.textContent = `${activeH}p`;
+    const qText = document.getElementById("settingsCurrentQualityText");
+    if (qText) qText.textContent = `${activeH}p`;
 
     // Dynamic multi-resolution YouTube stream resolver & description metadata sync
     const vidId = d.id || extractVideoId(url, d);
+    currentVideoItem = d;
+    currentVideoItem.id = vidId;
+    updateNavButtonsState();
+
     if (vidId) {
       fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}`)
         .then(res => res.json())
@@ -975,8 +1225,8 @@ window.UltraVid = window.UltraVid || {};
             if (resData.qualities && resData.qualities.length) {
               populateQualitySheet(resData.qualities, activeH);
               const matched = resData.qualities.find(q => q.height === activeH) || resData.qualities[0];
-              if (matched && qLabel) {
-                qLabel.textContent = matched.resolution;
+              if (matched && qText) {
+                qText.textContent = matched.resolution;
               }
             }
           }
@@ -1105,6 +1355,11 @@ window.UltraVid = window.UltraVid || {};
 
     closeDescriptionSheet();
     closeQualityPicker();
+    isScreenLocked = false;
+    const barrier = document.getElementById('screenLockBarrier');
+    if (barrier) barrier.classList.remove('active');
+    const unlockBtn = document.getElementById('unlockToastBtn');
+    if (unlockBtn) unlockBtn.classList.remove('visible');
     document.body.classList.remove('watch-route-active');
 
     const player = document.getElementById("mainVideoPlayer") || document.getElementById("mainVideo") || videoEl;
@@ -1204,10 +1459,10 @@ window.UltraVid = window.UltraVid || {};
 
     activeQualityIndex = index;
     const video = document.getElementById('mainVideoPlayer') || videoEl;
-    const labelEl = document.getElementById('activeQualityLabel');
+    const qText = document.getElementById('settingsCurrentQualityText');
 
-    if (labelEl) {
-      labelEl.textContent = selected.resolution;
+    if (qText) {
+      qText.textContent = selected.resolution;
     }
 
     if (video && selected.url) {
@@ -1232,22 +1487,27 @@ window.UltraVid = window.UltraVid || {};
       showToast(`Switched quality to ${selected.resolution}`);
     }
 
-    // Close modal bottom sheet
+    // Close settings modal bottom sheet
     closeQualityPicker();
   }
 
   function openQualityPicker() {
-    const overlay = document.getElementById('qualityOverlay');
-    const sheet = document.getElementById('qualitySheet');
-    if (!overlay || !sheet) return;
+    const overlay = document.getElementById('playerSettingsOverlay');
+    const mainView = document.getElementById('settingsMainMenuView');
+    const qualView = document.getElementById('settingsQualitySubView');
+    const speedView = document.getElementById('settingsSpeedSubView');
+    if (overlay) {
+      if (mainView) mainView.style.display = 'none';
+      if (speedView) speedView.style.display = 'none';
+      if (qualView) qualView.style.display = 'block';
+      overlay.classList.add('active');
+    }
 
-    if (currentAvailableQualities && currentAvailableQualities.length > 0) {
-      populateQualitySheet(currentAvailableQualities);
-    } else {
+    if (!currentAvailableQualities || currentAvailableQualities.length === 0) {
       const d = currentData;
       const vidId = d ? (d.id || extractVideoId(currentUrl, d)) : null;
       if (vidId) {
-        const list = document.getElementById('qualityOptionsList') || document.querySelector('.quality-options-container');
+        const list = document.getElementById('qualityOptionsList');
         if (list) list.innerHTML = `<div class="mut" style="text-align:center;padding:16px;">Loading resolutions...</div>`;
         fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}`)
           .then(res => res.json())
@@ -1261,16 +1521,11 @@ window.UltraVid = window.UltraVid || {};
           });
       }
     }
-
-    overlay.classList.remove('hidden');
-    requestAnimationFrame(() => sheet.classList.remove('sheet-hidden'));
   }
 
   function closeQualityPicker() {
-    const overlay = document.getElementById('qualityOverlay');
-    const sheet = document.getElementById('qualitySheet');
-    if (sheet) sheet.classList.add('sheet-hidden');
-    if (overlay) setTimeout(() => overlay.classList.add('hidden'), 250);
+    const overlay = document.getElementById('playerSettingsOverlay');
+    if (overlay) overlay.classList.remove('active');
   }
 
   function openDownloads(customUrl = null) {
@@ -1384,6 +1639,11 @@ window.UltraVid = window.UltraVid || {};
     setCurrentUrl,
     showPlayerErrorState,
     hidePlayerErrorState,
-    attachBufferGatedUpNextLoader
+    attachBufferGatedUpNextLoader,
+    updateNavButtonsState,
+    playNextVideo,
+    playPrevVideo,
+    initSettingsMenu,
+    renderSpeedOptions
   };
 })();

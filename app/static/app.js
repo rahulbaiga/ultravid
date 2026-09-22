@@ -117,7 +117,13 @@
       return;
     }
 
-    // 2c. If quality overlay modal is open, dismiss modal
+    // 2c. If player settings overlay or quality overlay modal is open, dismiss modal
+    const settingsOverlay = document.getElementById('playerSettingsOverlay');
+    if (settingsOverlay && settingsOverlay.classList.contains('active')) {
+      settingsOverlay.classList.remove('active');
+      return;
+    }
+
     const qualityOverlay = document.getElementById('qualityOverlay');
     if (qualityOverlay && !qualityOverlay.classList.contains('hidden')) {
       const player = window.UltraVid && window.UltraVid.player;
@@ -212,6 +218,8 @@
     if (actionOverlay && !actionOverlay.classList.contains('hidden')) return false;
     const dlOverlay = document.getElementById('dlOverlay');
     if (dlOverlay && !dlOverlay.classList.contains('hidden')) return false;
+    const settingsOverlay = document.getElementById('playerSettingsOverlay');
+    if (settingsOverlay && settingsOverlay.classList.contains('active')) return false;
     const qualityOverlay = document.getElementById('qualityOverlay');
     if (qualityOverlay && !qualityOverlay.classList.contains('hidden')) return false;
     const descOverlay = document.getElementById('descriptionOverlay');
