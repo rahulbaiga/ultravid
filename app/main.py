@@ -41,8 +41,8 @@ app.add_middleware(
 async def cache_headers_middleware(request, call_next):
     resp = await call_next(request)
     p = request.url.path
-    if p in ("/", "/index.html", "/app.js") or p.startswith("/api/feed"):
-        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    if p.endswith(".js") or p.endswith(".html") or p.endswith(".css") or p in ("/", "") or p.startswith("/api/feed"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
     elif p.startswith("/api/search"):
