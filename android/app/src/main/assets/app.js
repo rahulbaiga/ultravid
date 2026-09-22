@@ -117,6 +117,18 @@
       return;
     }
 
+    // 2c. If quality overlay modal is open, dismiss modal
+    const qualityOverlay = document.getElementById('qualityOverlay');
+    if (qualityOverlay && !qualityOverlay.classList.contains('hidden')) {
+      const player = window.UltraVid && window.UltraVid.player;
+      if (player && typeof player.closeQualityPicker === 'function') {
+        player.closeQualityPicker();
+      } else {
+        qualityOverlay.classList.add('hidden');
+      }
+      return;
+    }
+
     // 3. If watch player is open, close player and restore feed
     const playerComp = window.UltraVid && window.UltraVid.player;
     const watchView = document.getElementById('watchView');
@@ -125,6 +137,7 @@
       : (watchView && !watchView.classList.contains('hidden'));
 
     if (isWatchOpen) {
+      document.body.classList.remove('watch-route-active');
       if (playerComp && typeof playerComp.teardownWatchUI === 'function') {
         playerComp.teardownWatchUI();
       } else if (playerComp && typeof playerComp.showHomeView === 'function') {
@@ -132,6 +145,8 @@
       }
       return;
     }
+
+    document.body.classList.remove('watch-route-active');
 
     // 4. Category / Feed Back-Navigation
     const targetCategory = (e.state && e.state.category)
@@ -174,6 +189,7 @@
   const PULL_THRESHOLD = 75;
 
   function canPullToRefresh() {
+    if (document.body.classList.contains('watch-route-active')) return false;
     if (window.scrollY > 0) return false;
     const watchView = document.getElementById('watchView');
     if (watchView && !watchView.classList.contains('hidden')) return false;
@@ -183,6 +199,8 @@
     if (actionOverlay && !actionOverlay.classList.contains('hidden')) return false;
     const dlOverlay = document.getElementById('dlOverlay');
     if (dlOverlay && !dlOverlay.classList.contains('hidden')) return false;
+    const qualityOverlay = document.getElementById('qualityOverlay');
+    if (qualityOverlay && !qualityOverlay.classList.contains('hidden')) return false;
     return true;
   }
 
@@ -326,6 +344,7 @@
     header.init({
       onSearch: (q) => doSearch(q),
       onLogoClick: () => {
+        document.body.classList.remove('watch-route-active');
         player.pause();
         feed.switchTab("home");
         if (chips && typeof chips.selectCategory === "function") {
@@ -350,18 +369,21 @@
     // 6. Initialize Bottom Navigation (Tier 1)
     bottomNav.init({
       onHome: () => {
+        document.body.classList.remove('watch-route-active');
         player.pause();
         header.setValue("");
         header.hideSuggestions();
         resetChrome();
       },
       onTrending: () => {
+        document.body.classList.remove('watch-route-active');
         player.pause();
         header.setValue("");
         header.hideSuggestions();
         resetChrome();
       },
       onLibrary: () => {
+        document.body.classList.remove('watch-route-active');
         player.pause();
         header.setValue("");
         header.hideSuggestions();
@@ -383,6 +405,7 @@
 
     // 8. Handle direct watch URL hash if present
     if (hash && hash.startsWith("#watch/")) {
+      document.body.classList.add('watch-route-active');
       const vidId = hash.replace("#watch/", "").trim();
       if (vidId) {
         player.loadAndPlay(`https://www.youtube.com/watch?v=${vidId}`);

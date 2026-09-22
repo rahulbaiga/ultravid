@@ -1,11 +1,19 @@
 /**
  * UltraVid Video Player & Downloads Component
  * Tokenized Invalidation Lifecycle & In-DOM Error State Machine
+ * YouTube Mobile UI/UX Parity: Edge-to-Edge Player, Horizontal Action Pills, Up Next Feed
  */
 window.UltraVid = window.UltraVid || {};
 
 (function() {
   const { fmtDur, fmtViews, isUrl, refreshIcons } = window.UltraVid.utils;
+
+  const escapeHtml = (window.UltraVid && window.UltraVid.utils && window.UltraVid.utils.escapeHtml)
+    || function(str) {
+      return String(str || '').replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[m]);
+    };
 
   let homeView = null;
   let watchView = null;
@@ -15,19 +23,10 @@ window.UltraVid = window.UltraVid || {};
   let playerErrorOverlay = null;
   let playerRetryBtn = null;
   let playerErrorMsg = null;
-  let backBtn = null;
-  let wTitle = null;
-  let wChannel = null;
-  let wMeta = null;
-  let wAvatar = null;
   let likeBtn = null;
   let likeCount = null;
   let dislikeBtn = null;
-  let qualitySel = null;
   let shareBtn = null;
-  let shareMsg = null;
-  let relatedEl = null;
-  let dlOpenBtn = null;
   let dlOverlay = null;
   let dlSheet = null;
   let dlClose = null;
@@ -50,31 +49,180 @@ window.UltraVid = window.UltraVid || {};
   function init(callbacks = {}) {
     homeView = document.getElementById("tab-home") || document.getElementById("homeView");
     watchView = document.getElementById("watchView");
-    videoEl = document.getElementById("mainVideo") || document.getElementById("videoEl");
-    playerSpinner = document.getElementById("playerSpinner");
-    playerBigPlayBtn = document.getElementById("playerBigPlayBtn");
-    playerErrorOverlay = document.getElementById("playerErrorOverlay");
-    playerRetryBtn = document.getElementById("playerRetryBtn");
-    playerErrorMsg = document.getElementById("playerErrorMsg");
-    backBtn = document.getElementById("backBtn") || document.getElementById("watchBackBtn");
-    wTitle = document.getElementById("wTitle");
-    wChannel = document.getElementById("wChannel");
-    wMeta = document.getElementById("wMeta");
-    wAvatar = document.getElementById("wAvatar");
-    likeBtn = document.getElementById("likeBtn");
-    likeCount = document.getElementById("likeCount");
-    dislikeBtn = document.getElementById("dislikeBtn");
-    qualitySel = document.getElementById("qualitySel");
-    shareBtn = document.getElementById("shareBtn");
-    shareMsg = document.getElementById("shareMsg");
-    relatedEl = document.getElementById("related");
-    dlOpenBtn = document.getElementById("dlOpenBtn");
     dlOverlay = document.getElementById("dlOverlay");
     dlSheet = document.getElementById("dlSheet");
     dlClose = document.getElementById("dlClose");
     dlList = document.getElementById("dlList");
     dlStatus = document.getElementById("dlStatus");
     mp3Btn = document.getElementById("mp3Btn");
+
+    if (dlClose) dlClose.onclick = closeDownloads;
+    if (dlOverlay) {
+      dlOverlay.onclick = (e) => {
+        if (e.target === dlOverlay) closeDownloads();
+      };
+    }
+    if (mp3Btn) {
+      mp3Btn.onclick = () => startDownload("mp3", true);
+    }
+
+    const qOverlay = document.getElementById("qualityOverlay");
+    const qClose = document.getElementById("qualityCloseBtn");
+    if (qClose) qClose.onclick = closeQualityPicker;
+    if (qOverlay) {
+      qOverlay.onclick = (e) => {
+        if (e.target === qOverlay) closeQualityPicker();
+      };
+    }
+  }
+
+  function renderWatchView(container, videoData) {
+    const title = videoData.title || 'Untitled Video';
+    const channel = videoData.channel || videoData.uploader || videoData.channelTitle || 'Creator';
+    const views = videoData.views
+      ? `${videoData.views} views`
+      : (videoData.view_count ? `${fmtViews(videoData.view_count)} views` : 'Popular');
+    const duration = videoData.duration_string || (videoData.duration ? fmtDur(videoData.duration) : '');
+    const uploadDate = videoData.upload_date || videoData.uploaded || 'Recently';
+    const avatarLetter = (channel[0] || 'U').toUpperCase();
+    const likes = videoData.likes || (videoData.like_count ? fmtViews(videoData.like_count) : 'Like');
+    const subCount = videoData.subscribers || '1.4M subscribers';
+    const commentsCount = videoData.comment_count ? fmtViews(videoData.comment_count) : '80';
+    const topComment = videoData.top_comment || 'Amazing high quality video! Thanks for sharing this.';
+
+    container.innerHTML = `
+      <div class="watch-container">
+        <!-- 1. Full 16:9 Edge-to-Edge Player Viewport -->
+        <div class="player-viewport-wrapper">
+          <button class="player-floating-back" id="playerBackBtn" aria-label="Back">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+          </button>
+          <video id="mainVideoPlayer" controls autoplay playsinline preload="auto" poster="${videoData.thumbnail || ''}">
+            <source src="${videoData.stream_url || videoData.url || ''}" type="video/mp4">
+          </video>
+          <!-- Center Buffer Spinner -->
+          <div id="playerSpinner" class="player-spinner hidden">
+            <div class="spinner-ring"></div>
+          </div>
+          <!-- Autoplay Policy Fallback Big Play Button -->
+          <button type="button" id="playerBigPlayBtn" class="player-big-play-btn hidden" aria-label="Play">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          </button>
+          <!-- In-DOM Error & Retry Overlay -->
+          <div id="playerErrorOverlay" class="player-error-overlay hidden">
+            <div class="player-error-icon" style="font-size:28px">⚠️</div>
+            <div id="playerErrorMsg" class="player-error-msg" style="font-size:14px;color:#eee">An error occurred. Please try again.</div>
+            <button type="button" id="playerRetryBtn" class="player-retry-btn">Tap to retry</button>
+          </div>
+        </div>
+
+        <!-- 2. Video Info Block -->
+        <div class="watch-info-section">
+          <h1 class="watch-video-title" id="wTitle">${escapeHtml(title)}</h1>
+          <div class="watch-meta-row" id="wMeta">
+            <span id="wViews">${views}</span>
+            <span>•</span>
+            <span id="wDate">${uploadDate}</span>
+            <span class="meta-more-btn" id="metaMoreBtn">...more</span>
+          </div>
+          <div id="watchDescription" class="watch-description hidden" style="font-size:12px;color:#ccc;line-height:1.4;margin:8px 0;background:rgba(255,255,255,0.05);padding:10px 12px;border-radius:8px;white-space:pre-wrap;"></div>
+
+          <!-- 3. Channel Row & Subscribe Pill -->
+          <div class="watch-channel-row">
+            <div class="channel-info-left">
+              <div class="channel-avatar-img" id="wAvatar" style="display:flex;align-items:center;justify-content:center;font-weight:bold;color:#fff;">
+                ${avatarLetter}
+              </div>
+              <div class="channel-text-wrap">
+                <span class="channel-display-name" id="wChannel">${escapeHtml(channel)}</span>
+                <span class="channel-sub-count" id="wSubCount">${subCount}</span>
+              </div>
+            </div>
+            <button class="btn-youtube-subscribe" id="subscribeBtn">Subscribe</button>
+          </div>
+
+          <!-- 4. Action Pills Bar -->
+          <div class="watch-action-bar">
+            <div class="action-pill-segmented">
+              <button id="likeBtn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+                <span id="likeCount">${likes}</span>
+              </button>
+              <div class="segment-divider"></div>
+              <button id="dislikeBtn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path></svg>
+              </button>
+            </div>
+
+            <button class="action-pill" id="shareBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+              <span>Share</span>
+            </button>
+
+            <button class="action-pill" id="downloadActionBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>Download</span>
+            </button>
+
+            <button class="action-pill" id="qualitySelectorBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <span id="activeQualityLabel">720p</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 5. Comments Teaser Card -->
+        <div class="watch-comments-teaser" id="commentsTeaserCard">
+          <div class="comments-teaser-header">
+            <span class="comments-teaser-title">Comments</span>
+            <span class="comments-teaser-count">${videoData.comment_count ? fmtViews(videoData.comment_count) : '80'}</span>
+          </div>
+          <div class="comments-teaser-preview">
+            <div class="comments-user-avatar"></div>
+            <span class="comments-preview-text">${escapeHtml(videoData.top_comment || 'Amazing high quality video! Thanks for sharing this.')}</span>
+          </div>
+        </div>
+
+        <!-- 6. Up Next Section -->
+        <div class="watch-up-next-section">
+          <div class="up-next-heading">Up next</div>
+          <div id="upNextContainer"></div>
+        </div>
+      </div>
+    `;
+
+    // Back button wiring
+    const backBtn = document.getElementById('playerBackBtn');
+    if (backBtn) {
+      backBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        closeWatch();
+      });
+    }
+
+    bindWatchEvents();
+  }
+
+  function bindWatchEvents() {
+    videoEl = document.getElementById("mainVideoPlayer") || document.getElementById("mainVideo");
+    playerSpinner = document.getElementById("playerSpinner");
+    playerBigPlayBtn = document.getElementById("playerBigPlayBtn");
+    playerErrorOverlay = document.getElementById("playerErrorOverlay");
+    playerRetryBtn = document.getElementById("playerRetryBtn");
+    playerErrorMsg = document.getElementById("playerErrorMsg");
+    likeBtn = document.getElementById("likeBtn");
+    likeCount = document.getElementById("likeCount");
+    dislikeBtn = document.getElementById("dislikeBtn");
+    shareBtn = document.getElementById("shareBtn");
+    const downloadActionBtn = document.getElementById("downloadActionBtn");
+    const qualitySelectorBtn = document.getElementById("qualitySelectorBtn");
+    const subscribeBtn = document.getElementById("subscribeBtn");
+    const commentsTeaserCard = document.getElementById("commentsTeaserCard");
+    const metaMoreBtn = document.getElementById("metaMoreBtn");
 
     if (videoEl) {
       videoEl.addEventListener("waiting", () => {
@@ -123,16 +271,18 @@ window.UltraVid = window.UltraVid || {};
       };
     }
 
-    if (backBtn) {
-      backBtn.onclick = (e) => {
-        if (e) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-        if (history.state && history.state.view === "watch") {
-          history.back();
+    if (subscribeBtn) {
+      let isSubscribed = false;
+      subscribeBtn.onclick = () => {
+        isSubscribed = !isSubscribed;
+        if (isSubscribed) {
+          subscribeBtn.textContent = 'Subscribed';
+          subscribeBtn.classList.add('subscribed');
+          showToast('Subscribed to ' + (currentData?.channel || currentData?.uploader || 'channel'));
         } else {
-          teardownWatchUI();
+          subscribeBtn.textContent = 'Subscribe';
+          subscribeBtn.classList.remove('subscribed');
+          showToast('Subscription removed');
         }
       };
     }
@@ -144,10 +294,10 @@ window.UltraVid = window.UltraVid || {};
           disliked = false;
           if (dislikeBtn) dislikeBtn.classList.remove("active");
           likeBtn.classList.add("active");
-          if (likeCount) likeCount.textContent = (likeN + 1) || "1";
+          if (likeCount) likeCount.textContent = fmtViews(likeN + 1);
         } else {
           likeBtn.classList.remove("active");
-          if (likeCount) likeCount.textContent = likeN || "0";
+          if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
         }
       };
     }
@@ -159,48 +309,74 @@ window.UltraVid = window.UltraVid || {};
         if (disliked) {
           liked = false;
           if (likeBtn) likeBtn.classList.remove("active");
-          if (likeCount) likeCount.textContent = likeN || "0";
+          if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
         }
       };
     }
 
     if (shareBtn) {
       shareBtn.onclick = async () => {
+        const sUrl = currentUrl || window.location.href;
         try {
-          await navigator.clipboard.writeText(currentUrl);
-          if (shareMsg) {
-            shareMsg.classList.remove("hidden");
-            setTimeout(() => shareMsg.classList.add("hidden"), 2000);
+          if (navigator.share) {
+            await navigator.share({ title: currentData?.title || 'UltraVid', url: sUrl });
+          } else {
+            await navigator.clipboard.writeText(sUrl);
+            showToast('Link copied to clipboard!');
           }
         } catch (e) {
-          prompt("Copy link:", currentUrl);
+          if (e.name !== 'AbortError') {
+            prompt('Copy link:', sUrl);
+          }
         }
       };
     }
 
-    if (qualitySel) {
-      qualitySel.onchange = () => {
-        if (!videoEl) return;
-        const ct = videoEl.currentTime;
-        videoEl.src = qualitySel.value;
-        videoEl.currentTime = ct;
-        const p = videoEl.play();
-        if (p !== undefined) p.catch(() => {});
+    if (downloadActionBtn) {
+      downloadActionBtn.onclick = () => openDownloads();
+    }
+
+    if (qualitySelectorBtn) {
+      qualitySelectorBtn.onclick = () => openQualityPicker();
+    }
+
+    if (commentsTeaserCard) {
+      commentsTeaserCard.onclick = () => {
+        showToast('Comments feature coming soon!');
       };
     }
 
-    if (dlOpenBtn) {
-      dlOpenBtn.onclick = () => openDownloads();
-    }
-    if (dlClose) dlClose.onclick = closeDownloads;
-    if (dlOverlay) {
-      dlOverlay.onclick = (e) => {
-        if (e.target === dlOverlay) closeDownloads();
+    if (metaMoreBtn) {
+      metaMoreBtn.onclick = () => {
+        const descEl = document.getElementById('watchDescription');
+        if (!descEl) return;
+        const isHidden = descEl.classList.contains('hidden');
+        if (isHidden) {
+          descEl.textContent = (currentData && currentData.description) ? currentData.description : 'No additional description provided.';
+          descEl.classList.remove('hidden');
+          metaMoreBtn.textContent = 'Show less';
+        } else {
+          descEl.classList.add('hidden');
+          metaMoreBtn.textContent = '...more';
+        }
       };
     }
-    if (mp3Btn) {
-      mp3Btn.onclick = () => startDownload("mp3", true);
+  }
+
+  function showToast(msg) {
+    let toast = document.getElementById('toastNotification');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'toastNotification';
+      toast.className = 'toast-notification hidden';
+      document.body.appendChild(toast);
     }
+    toast.textContent = msg;
+    toast.classList.remove('hidden');
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      toast.classList.add('hidden');
+    }, 2200);
   }
 
   function showPlayerErrorState(item, msg = "An error occurred. Please try again.") {
@@ -228,28 +404,65 @@ window.UltraVid = window.UltraVid || {};
   }
 
   function renderRelatedVideos(relList) {
-    if (!relatedEl) return;
-    relatedEl.innerHTML = "";
+    const upNextEl = document.getElementById("upNextContainer");
+    if (!upNextEl) return;
+    upNextEl.innerHTML = "";
+    if (!relList || !relList.length) {
+      upNextEl.innerHTML = `<div style="color:#888;font-size:13px;padding:12px 0;">No related videos found.</div>`;
+      return;
+    }
     const fragment = document.createDocumentFragment();
-    (relList || []).forEach(it => {
-      const div = document.createElement("div");
-      div.className = "rel";
-      div.innerHTML = `
-        <img src="${it.thumbnail || ''}" loading="lazy"/>
-        <div style="flex:1;min-width:0">
-          <div class="tt" style="min-height:0">${(it.title || "").slice(0, 100)}</div>
-          <div class="ch">${it.uploader || it.channel || it.channelTitle || ""}</div>
+    relList.forEach(it => {
+      const card = document.createElement("div");
+      card.className = "up-next-card";
+      const durBadge = (it.duration_string || (it.duration ? fmtDur(it.duration) : ''))
+        ? `<span class="dur-badge">${it.duration_string || fmtDur(it.duration)}</span>`
+        : '';
+      const views = it.views ? `${fmtViews(it.views)} views` : (it.view_count ? `${fmtViews(it.view_count)} views` : 'Popular');
+      const timeAgo = it.upload_date || it.uploaded || '';
+      const metaText = [views, timeAgo].filter(Boolean).join(' • ');
+
+      card.innerHTML = `
+        <div class="up-next-thumb-wrap">
+          <img src="${it.thumbnail || ''}" loading="lazy" alt="${escapeHtml(it.title || '')}" />
+          ${durBadge}
         </div>
+        <div class="up-next-info">
+          <div class="up-next-title">${escapeHtml(it.title || 'Untitled')}</div>
+          <div class="up-next-channel">${escapeHtml(it.uploader || it.channel || it.channelTitle || '')}</div>
+          <div class="up-next-meta">${metaText}</div>
+        </div>
+        <button type="button" class="up-next-more-btn" aria-label="More options">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="5" r="2"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <circle cx="12" cy="19" r="2"></circle>
+          </svg>
+        </button>
       `;
-      div.onclick = () => loadAndPlay(it);
-      fragment.appendChild(div);
+
+      card.onclick = (e) => {
+        if (e.target.closest('.up-next-more-btn')) {
+          e.stopPropagation();
+          if (window.UltraVid && window.UltraVid.actionSheet) {
+            window.UltraVid.actionSheet.open(it);
+          }
+          return;
+        }
+        loadAndPlay(it);
+      };
+
+      fragment.appendChild(card);
     });
-    relatedEl.appendChild(fragment);
+    upNextEl.appendChild(fragment);
   }
 
   function openWatch(url, preview = null, rel = []) {
     currentUrl = url;
     isWatchOpen = true;
+
+    // Apply route-level class to hide app header and zero-out padding
+    document.body.classList.add('watch-route-active');
 
     const vidId = extractVideoId(url, preview);
     try {
@@ -263,48 +476,29 @@ window.UltraVid = window.UltraVid || {};
       t.classList.remove("active-tab");
       t.classList.add("hidden");
     });
-    if (watchView) watchView.classList.remove("hidden");
 
-    // Reset video player and set state to LOADING
-    if (videoEl) {
-      videoEl.pause();
-      videoEl.removeAttribute("src");
-      videoEl.load();
+    const watchViewEl = document.getElementById("watchView") || watchView;
+    if (watchViewEl) {
+      watchViewEl.classList.remove("hidden");
+      renderWatchView(watchViewEl, preview || { url });
     }
+
+    // Set player state to LOADING
     if (playerSpinner) playerSpinner.classList.remove("hidden");
     if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
     hidePlayerErrorState();
-
-    // Populate initial preview metadata if available
-    const title = preview ? (preview.title || "") : "";
-    if (wTitle) wTitle.textContent = title || "Loading video…";
-
-    const ch = preview ? (preview.channelTitle || preview.uploader || preview.channel || "") : "";
-    if (wChannel) wChannel.textContent = ch || "Loading…";
-    if (wAvatar) {
-      const initial = ((ch || "U").trim().charAt(0) || "U").toUpperCase();
-      wAvatar.textContent = initial;
-    }
-
-    const views = preview ? (preview.views ? fmtViews(preview.views) : (preview.view_count ? fmtViews(preview.view_count) : "")) : "";
-    const dur = preview ? (preview.duration_string || (preview.duration ? fmtDur(preview.duration) : "")) : "";
-    if (wMeta) wMeta.textContent = [views, dur].filter(Boolean).join(" • ") || "Loading details…";
 
     // Reset interactive controls
     liked = false;
     disliked = false;
     likeN = preview && preview.like_count ? (parseInt(preview.like_count) || 0) : 0;
-    if (likeCount) likeCount.textContent = likeN > 0 ? String(likeN) : "0";
+    if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
     if (likeBtn) likeBtn.classList.remove("active");
     if (dislikeBtn) dislikeBtn.classList.remove("active");
 
-    if (qualitySel) {
-      qualitySel.innerHTML = "<option>Loading qualities…</option>";
-    }
-
     renderRelatedVideos(rel);
 
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "instant" });
     refreshIcons();
   }
 
@@ -317,6 +511,10 @@ window.UltraVid = window.UltraVid || {};
     const playables = (d.playable_streams && d.playable_streams.length ? d.playable_streams : (d.progressive_streams || []));
     const rawUrl = d.default_play_url || (playables[0] && playables[0].url) || "";
     const defUrl = rawUrl ? (rawUrl.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : "";
+
+    const activeH = (playables[0] && playables[0].height) || 720;
+    const qLabel = document.getElementById("activeQualityLabel");
+    if (qLabel) qLabel.textContent = `${activeH}p`;
 
     if (videoEl && defUrl) {
       videoEl.src = defUrl;
@@ -342,45 +540,34 @@ window.UltraVid = window.UltraVid || {};
       }
     }
 
-    if (wTitle) wTitle.textContent = d.title || "Video";
-    const ch = d.channel || d.uploader || "Unknown";
-    if (wChannel) wChannel.textContent = ch;
-    if (wAvatar) wAvatar.textContent = ((ch.trim().charAt(0) || "U")).toUpperCase();
+    const titleEl = document.getElementById("wTitle");
+    if (titleEl) titleEl.textContent = d.title || "Video";
 
-    const views = fmtViews(d.view_count);
-    const dur = d.duration_string || fmtDur(d.duration);
-    if (wMeta) wMeta.textContent = [views, dur, d.extractor].filter(Boolean).join(" • ");
+    const ch = d.channel || d.uploader || "Unknown";
+    const channelEl = document.getElementById("wChannel");
+    if (channelEl) channelEl.textContent = ch;
+
+    const avatarEl = document.getElementById("wAvatar");
+    if (avatarEl) avatarEl.textContent = ((ch.trim().charAt(0) || "U")).toUpperCase();
+
+    const viewsEl = document.getElementById("wViews");
+    if (viewsEl) viewsEl.textContent = `${fmtViews(d.view_count)} views`;
+
+    const dateEl = document.getElementById("wDate");
+    if (dateEl) dateEl.textContent = d.upload_date || d.uploaded || "Recently";
 
     liked = false;
     disliked = false;
     likeN = parseInt(d.like_count) || 0;
-    if (likeCount) likeCount.textContent = likeN > 0 ? String(likeN) : "0";
+    if (likeCount) likeCount.textContent = likeN > 0 ? fmtViews(likeN) : "Like";
     if (likeBtn) likeBtn.classList.remove("active");
     if (dislikeBtn) dislikeBtn.classList.remove("active");
-
-    if (qualitySel) {
-      qualitySel.innerHTML = "";
-      if (!playables.length) {
-        const o = document.createElement("option");
-        o.textContent = "No playable stream";
-        qualitySel.appendChild(o);
-      } else {
-        [...playables].sort((a, b) => (b.height || 0) - (a.height || 0)).forEach(f => {
-          const o = document.createElement("option");
-          const pUrl = f.url && f.url.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(f.url)}` : (f.url || "");
-          o.value = pUrl;
-          o.textContent = `${f.height}p • ${f.ext}`;
-          if (f.url === rawUrl || pUrl === defUrl) o.selected = true;
-          qualitySel.appendChild(o);
-        });
-      }
-    }
 
     let rel = [];
     try {
       const q = (lastQuery && !isUrl(lastQuery)) ? lastQuery : (d.title || "").split(" ").slice(0, 3).join(" ");
       if (q) {
-        const rr = await window.UltraVid.api.fetchSearch(q, { maxResults: 8 });
+        const rr = await window.UltraVid.api.fetchSearch(q, { maxResults: 10 });
         rel = (rr && rr.results) || [];
       }
     } catch (e) {}
@@ -407,30 +594,26 @@ window.UltraVid = window.UltraVid || {};
 
     if (!url) return;
 
-    // Tokenized Invalidation: Increment request counter
     const thisToken = ++currentPlaybackToken;
     lastFailedItem = preview;
 
-    // Instant watch view transition (0ms UI latency)
     openWatch(url, preview, []);
 
     try {
       const d = await window.UltraVid.api.extractStream(url);
 
-      // Tokenized Invalidation: Stale request check
       if (thisToken !== currentPlaybackToken || !isWatchOpen || currentUrl !== url) {
-        return; // Silently drop superseded response
+        return;
       }
 
       if (!d || d.detail) throw new Error(d ? d.detail : "Extraction failed");
 
       await hydrateWatchDetails(url, d, lastQuery, thisToken);
     } catch (err) {
-      // Ignore stale requests
       if (thisToken !== currentPlaybackToken) return;
 
       const isAbort = err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('abort'));
-      if (isAbort) return; // Silently drop user-initiated aborts
+      if (isAbort) return;
 
       console.error('[PlayerEngine] Stream playback failed:', err);
       showPlayerErrorState(preview, "Can't play this video • Tap to retry");
@@ -442,9 +625,11 @@ window.UltraVid = window.UltraVid || {};
   }
 
   function teardownWatchUI() {
-    currentPlaybackToken++; // Invalidate any inflight requests immediately
+    currentPlaybackToken++;
     pause();
-    const player = document.getElementById("mainVideo") || document.getElementById("videoEl") || videoEl;
+    document.body.classList.remove('watch-route-active');
+
+    const player = document.getElementById("mainVideoPlayer") || document.getElementById("mainVideo") || videoEl;
     if (player) {
       player.pause();
       player.removeAttribute("src");
@@ -457,9 +642,9 @@ window.UltraVid = window.UltraVid || {};
     const watchViewEl = document.getElementById("watchView") || watchView;
     if (watchViewEl) {
       watchViewEl.classList.add("hidden");
+      watchViewEl.innerHTML = "";
     }
 
-    // Restore the active tier-1 tab (e.g. #tab-home)
     const feed = window.UltraVid.feed;
     if (feed && typeof feed.getCurrentTab === "function") {
       const activeTab = feed.getCurrentTab() || "home";
@@ -494,6 +679,62 @@ window.UltraVid = window.UltraVid || {};
 
   function showHomeView() {
     closeWatch();
+  }
+
+  function openQualityPicker() {
+    const overlay = document.getElementById('qualityOverlay');
+    const sheet = document.getElementById('qualitySheet');
+    const list = document.getElementById('qualityOptionsList');
+    if (!overlay || !sheet || !list) return;
+
+    list.innerHTML = '';
+    const d = currentData;
+    const playables = (d && ((d.playable_streams && d.playable_streams.length) ? d.playable_streams : (d.progressive_streams || []))) || [];
+
+    if (!playables.length) {
+      list.innerHTML = `<div class="mut" style="text-align:center;padding:12px;">Default stream active (auto)</div>`;
+    } else {
+      const sorted = [...playables].sort((a, b) => (b.height || 0) - (a.height || 0));
+      sorted.forEach(f => {
+        const pUrl = f.url && f.url.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(f.url)}` : (f.url || "");
+        const isSelected = videoEl && videoEl.src && (videoEl.src.includes(encodeURIComponent(f.url)) || videoEl.src === f.url || videoEl.src === pUrl);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'qa-btn';
+        btn.style.justifyContent = 'space-between';
+        btn.innerHTML = `
+          <div style="display:flex;align-items:center;gap:12px;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <span style="font-weight:${isSelected ? '700' : '500'};color:${isSelected ? '#fff' : '#f1f1f1'}">${f.height}p ${f.height >= 720 ? 'HD' : ''} • ${f.ext}</span>
+          </div>
+          ${isSelected ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+        `;
+        btn.onclick = () => {
+          if (videoEl && pUrl) {
+            const ct = videoEl.currentTime;
+            videoEl.src = pUrl;
+            videoEl.currentTime = ct;
+            const p = videoEl.play();
+            if (p !== undefined) p.catch(() => {});
+            const qLabel = document.getElementById('activeQualityLabel');
+            if (qLabel) qLabel.textContent = `${f.height}p`;
+            showToast(`Switched quality to ${f.height}p`);
+          }
+          closeQualityPicker();
+        };
+        list.appendChild(btn);
+      });
+    }
+
+    overlay.classList.remove('hidden');
+    requestAnimationFrame(() => sheet.classList.remove('sheet-hidden'));
+  }
+
+  function closeQualityPicker() {
+    const overlay = document.getElementById('qualityOverlay');
+    const sheet = document.getElementById('qualitySheet');
+    if (sheet) sheet.classList.add('sheet-hidden');
+    if (overlay) setTimeout(() => overlay.classList.add('hidden'), 250);
   }
 
   function openDownloads(customUrl = null) {
@@ -583,6 +824,7 @@ window.UltraVid = window.UltraVid || {};
 
   window.UltraVid.player = {
     init,
+    renderWatchView,
     loadAndPlay,
     openWatch,
     hydrateWatchDetails,
@@ -591,6 +833,8 @@ window.UltraVid = window.UltraVid || {};
     closeWatch,
     teardownWatchUI,
     getIsWatchOpen: () => isWatchOpen,
+    openQualityPicker,
+    closeQualityPicker,
     openDownloads,
     closeDownloads,
     startDownload,
