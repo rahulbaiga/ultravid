@@ -366,7 +366,9 @@ body.watch-route-active main.wrap {
   color: #f1f1f1;
 }
 
-/* 1. Edge-to-Edge 16:9 Video Viewport */
+/* ========================================================
+   CUSTOM YOUTUBE MOBILE PLAYER (ZERO BROWSER NATIVE CONTROLS)
+   ======================================================== */
 .player-viewport-wrapper {
   position: sticky;
   top: 0;
@@ -375,20 +377,44 @@ body.watch-route-active main.wrap {
   width: 100vw;
   max-width: 100%;
   aspect-ratio: 16 / 9;
-  background: #000000;
+  background: #000;
   z-index: 999;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
+/* Fullscreen support */
+#customPlayerViewport:fullscreen,
+.player-viewport-wrapper:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  aspect-ratio: auto !important;
+}
+#customPlayerViewport:-webkit-full-screen,
+.player-viewport-wrapper:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  aspect-ratio: auto !important;
+}
+
+/* Suppress all native browser video overlays */
 .player-viewport-wrapper video {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
-  border-radius: 0 !important;
-  background: #000000;
+}
+.player-viewport-wrapper video::-webkit-media-controls {
+  display: none !important;
+}
+.player-viewport-wrapper video::-webkit-media-controls-enclosure {
+  display: none !important;
 }
 
+/* Floating Back Button */
 .player-floating-back {
   position: absolute;
   top: 12px;
@@ -404,60 +430,227 @@ body.watch-route-active main.wrap {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 10;
+  z-index: 30;
   transition: opacity 0.2s ease, transform 0.15s ease;
 }
 .player-floating-back:active {
   transform: scale(0.92);
 }
 
-.player-spinner {
+/* Custom Controls Overlay Layer */
+.custom-player-overlay {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0,0,0,0.4);
-  z-index: 5;
-  pointer-events: none;
-}
-.spinner-ring {
-  width: 44px;
-  height: 44px;
-  border: 4px solid rgba(255,255,255,0.2);
-  border-top-color: #ff0000;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
+  flex-direction: column;
+  justify-content: space-between;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.22s ease, visibility 0.22s ease;
+  z-index: 20;
 }
 
-.player-big-play-btn {
+.custom-player-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Double-Tap Gesture Zones */
+.gesture-zone {
   position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  background: rgba(0,0,0,0.75);
-  border: 2px solid rgba(255,255,255,0.6);
-  color: #ffffff;
+  top: 0;
+  bottom: 48px;
+  width: 42%;
+  z-index: 22;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 6;
+  pointer-events: auto;
+}
+.gesture-zone.left { left: 0; }
+.gesture-zone.right { right: 0; }
+
+.skip-indicator {
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 18px;
+  border-radius: 24px;
+  opacity: 0;
+  transform: scale(0.7);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.skip-indicator.active {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Center Play/Pause & Spinner */
+.player-center-controls {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 25;
+  pointer-events: none;
+}
+
+.center-play-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  border: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
   cursor: pointer;
-  transition: transform .15s ease, background .15s ease;
+  transition: transform 0.15s ease, background 0.15s ease;
 }
-.player-big-play-btn:active {
-  transform: scale(0.92);
+.center-play-btn:active {
+  transform: scale(0.9);
+  background: rgba(0, 0, 0, 0.85);
 }
-.player-big-play-btn svg {
-  width: 28px;
-  height: 28px;
-  margin-left: 3px;
-  color: #ffffff;
+
+/* Single Buffer Spinner (Strictly Centered) */
+.player-buffer-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  z-index: 15;
+  pointer-events: none;
+  display: none;
+}
+.player-buffer-spinner.active {
+  display: block;
+}
+.player-buffer-spinner svg {
+  width: 100%;
+  height: 100%;
+  animation: infinite-spin 1.1s linear infinite;
+}
+.player-buffer-spinner circle {
+  stroke: #ff0033;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 85, 200;
+  stroke-dashoffset: 0;
+  animation: infinite-dash 1.4s ease-in-out infinite;
+}
+
+/* Bottom Control Bar & Red Scrubber */
+.player-bottom-bar {
+  width: 100%;
+  padding: 0 10px 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  pointer-events: auto;
+}
+
+.player-timeline-container {
+  width: 100%;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  touch-action: none;
+}
+
+.timeline-track-bg {
+  width: 100%;
+  height: 3.5px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 2px;
+  position: relative;
+  transition: height 0.12s ease;
+}
+.player-timeline-container:active .timeline-track-bg {
+  height: 5px;
+}
+
+.timeline-buffer-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 2px;
+}
+
+.timeline-progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0%;
+  background: #ff0033;
+  border-radius: 2px;
+}
+
+.timeline-scrubber-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  transform: translate(-50%, -50%) scale(0);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ff0033;
+  transition: transform 0.15s ease;
+  pointer-events: none;
+}
+.player-timeline-container:active .timeline-scrubber-thumb,
+.custom-player-overlay.visible .timeline-scrubber-thumb {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.player-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 0 4px;
+}
+
+.player-time-display {
+  letter-spacing: 0.3px;
+  color: #f1f1f1;
+}
+
+.player-right-btns {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.player-mini-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .player-error-overlay {
@@ -469,7 +662,7 @@ body.watch-route-active main.wrap {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  z-index: 20;
+  z-index: 35;
   color: #ffffff;
   padding: 24px;
   text-align: center;

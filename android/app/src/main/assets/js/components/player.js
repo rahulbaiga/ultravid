@@ -19,7 +19,6 @@ window.UltraVid = window.UltraVid || {};
   let watchView = null;
   let videoEl = null;
   let playerSpinner = null;
-  let playerBigPlayBtn = null;
   let playerErrorOverlay = null;
   let playerRetryBtn = null;
   let playerErrorMsg = null;
@@ -40,8 +39,19 @@ window.UltraVid = window.UltraVid || {};
   let currentPlaybackToken = 0;
   let lastFailedItem = null;
   let currentBufferCheckCleanup = null;
+  let customPlayerCleanup = null;
   let currentAvailableQualities = [];
   let activeQualityIndex = 0;
+
+  function showBufferSpinner() {
+    const s = document.getElementById("playerBufferSpinner") || playerSpinner;
+    if (s) s.classList.add("active");
+  }
+
+  function hideBufferSpinner() {
+    const s = document.getElementById("playerBufferSpinner") || playerSpinner;
+    if (s) s.classList.remove("active");
+  }
 
   function init(callbacks = {}) {
     homeView = document.getElementById("tab-home") || document.getElementById("homeView");
@@ -108,25 +118,77 @@ window.UltraVid = window.UltraVid || {};
     container.innerHTML = `
       <div class="watch-container">
         <!-- 1. Full 16:9 Edge-to-Edge Player Viewport -->
-        <div class="player-viewport-wrapper">
+        <div class="player-viewport-wrapper" id="customPlayerViewport">
+          <!-- 1. Pure Video Tag (ZERO Native Controls) -->
+          <video id="mainVideoPlayer" playsinline preload="auto" poster="${videoData.thumbnail || ''}">
+            <source src="${videoData.stream_url || videoData.url || ''}" type="video/mp4">
+          </video>
+
+          <!-- 2. Single Centered YouTube Red Buffer Spinner -->
+          <div class="player-buffer-spinner" id="playerBufferSpinner">
+            <svg viewBox="25 25 50 50">
+              <circle cx="50" cy="50" r="20" fill="none"></circle>
+            </svg>
+          </div>
+
+          <!-- 3. Gesture Zones (Double-Tap Skip) -->
+          <div class="gesture-zone left" id="gestureZoneLeft">
+            <div class="skip-indicator" id="skipIndicatorLeft">◄◄ 10s</div>
+          </div>
+          <div class="gesture-zone right" id="gestureZoneRight">
+            <div class="skip-indicator" id="skipIndicatorRight">10s ►►</div>
+          </div>
+
+          <!-- 4. Floating Top Back Button -->
           <button class="player-floating-back" id="playerBackBtn" aria-label="Back">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="19" y1="12" x2="5" y2="12"></line>
               <polyline points="12 19 5 12 12 5"></polyline>
             </svg>
           </button>
-          <video id="mainVideoPlayer" controls autoplay playsinline preload="auto" poster="${videoData.thumbnail || ''}">
-            <source src="${videoData.stream_url || videoData.url || ''}" type="video/mp4">
-          </video>
-          <!-- Center Buffer Spinner -->
-          <div id="playerSpinner" class="player-spinner hidden">
-            <div class="spinner-ring"></div>
+
+          <!-- 5. Custom Overlay & Controls -->
+          <div class="custom-player-overlay visible" id="customPlayerOverlay">
+            <div></div> <!-- Spacer for top alignment -->
+
+            <!-- Center Play/Pause Button -->
+            <div class="player-center-controls">
+              <button class="center-play-btn" id="centerPlayPauseBtn" aria-label="Play/Pause">
+                <svg id="playIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <svg id="pauseIconSvg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
+                  <rect x="6" y="4" width="4" height="16"></rect>
+                  <rect x="14" y="4" width="4" height="16"></rect>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Bottom Bar (Red Scrubber & Timers) -->
+            <div class="player-bottom-bar">
+              <div class="player-timeline-container" id="playerTimeline">
+                <div class="timeline-track-bg">
+                  <div class="timeline-buffer-bar" id="timelineBufferBar"></div>
+                  <div class="timeline-progress-bar" id="timelineProgressBar"></div>
+                  <div class="timeline-scrubber-thumb" id="timelineThumb"></div>
+                </div>
+              </div>
+              <div class="player-bottom-row">
+                <div class="player-time-display">
+                  <span id="currentTimeLabel">0:00</span> / <span id="durationLabel">0:00</span>
+                </div>
+                <div class="player-right-btns">
+                  <button class="player-mini-btn" id="playerFullscreenBtn" aria-label="Fullscreen">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-          <!-- Autoplay Policy Fallback Big Play Button -->
-          <button type="button" id="playerBigPlayBtn" class="player-big-play-btn hidden" aria-label="Play">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          </button>
-          <!-- In-DOM Error & Retry Overlay -->
+
+          <!-- 6. In-DOM Error & Retry Overlay -->
           <div id="playerErrorOverlay" class="player-error-overlay hidden">
             <div class="player-error-icon" style="font-size:28px">⚠️</div>
             <div id="playerErrorMsg" class="player-error-msg" style="font-size:14px;color:#eee">An error occurred. Please try again.</div>
@@ -216,10 +278,294 @@ window.UltraVid = window.UltraVid || {};
     bindWatchEvents();
   }
 
+  function formatTime(seconds) {
+    if (isNaN(seconds) || seconds < 0) return '0:00';
+    const sec = Math.floor(seconds % 60);
+    const min = Math.floor((seconds / 60) % 60);
+    const hrs = Math.floor(seconds / 3600);
+    const sStr = sec < 10 ? '0' + sec : sec;
+    if (hrs > 0) {
+      const mStr = min < 10 ? '0' + min : min;
+      return `${hrs}:${mStr}:${sStr}`;
+    }
+    return `${min}:${sStr}`;
+  }
+
+  function initializeCustomPlayer(video) {
+    if (customPlayerCleanup) {
+      customPlayerCleanup();
+      customPlayerCleanup = null;
+    }
+
+    if (!video) return;
+
+    const overlay = document.getElementById('customPlayerOverlay');
+    const spinner = document.getElementById('playerBufferSpinner');
+    const playPauseBtn = document.getElementById('centerPlayPauseBtn');
+    const playIcon = document.getElementById('playIconSvg');
+    const pauseIcon = document.getElementById('pauseIconSvg');
+    const timeline = document.getElementById('playerTimeline');
+    const progressBar = document.getElementById('timelineProgressBar');
+    const bufferBar = document.getElementById('timelineBufferBar');
+    const thumb = document.getElementById('timelineThumb');
+    const currentLabel = document.getElementById('currentTimeLabel');
+    const durationLabel = document.getElementById('durationLabel');
+    const fullscreenBtn = document.getElementById('playerFullscreenBtn');
+    const zoneLeft = document.getElementById('gestureZoneLeft');
+    const zoneRight = document.getElementById('gestureZoneRight');
+    const indLeft = document.getElementById('skipIndicatorLeft');
+    const indRight = document.getElementById('skipIndicatorRight');
+
+    if (!overlay || !playPauseBtn || !timeline) return;
+
+    let hideTimer = null;
+    let isDragging = false;
+
+    function resetHideTimer() {
+      clearTimeout(hideTimer);
+      if (!video.paused) {
+        hideTimer = setTimeout(() => {
+          if (!isDragging && overlay) overlay.classList.remove('visible');
+        }, 2800);
+      }
+    }
+
+    function showOverlay() {
+      if (overlay) overlay.classList.add('visible');
+      resetHideTimer();
+    }
+
+    function toggleOverlay() {
+      if (!overlay) return;
+      if (overlay.classList.contains('visible')) {
+        overlay.classList.remove('visible');
+        clearTimeout(hideTimer);
+      } else {
+        showOverlay();
+      }
+    }
+
+    // Play / Pause Toggle
+    function togglePlayPause() {
+      if (video.paused) {
+        video.play().catch(e => console.log('Playback start defer:', e));
+      } else {
+        video.pause();
+      }
+      resetHideTimer();
+    }
+
+    playPauseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePlayPause();
+    });
+
+    function updatePlayPauseIcons() {
+      if (!playIcon || !pauseIcon) return;
+      if (!video.paused) {
+        playIcon.style.display = 'none';
+        pauseIcon.style.display = 'block';
+      } else {
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+      }
+    }
+
+    video.addEventListener('play', () => {
+      updatePlayPauseIcons();
+      resetHideTimer();
+    });
+
+    video.addEventListener('pause', () => {
+      updatePlayPauseIcons();
+      showOverlay();
+    });
+
+    // Single Buffer Spinner Management
+    if (spinner) {
+      video.addEventListener('waiting', () => spinner.classList.add('active'));
+      video.addEventListener('seeking', () => spinner.classList.add('active'));
+      video.addEventListener('playing', () => spinner.classList.remove('active'));
+      video.addEventListener('canplay', () => spinner.classList.remove('active'));
+    }
+
+    // Time & Progress Updates
+    video.addEventListener('timeupdate', () => {
+      if (!isDragging && video.duration) {
+        const pct = (video.currentTime / video.duration) * 100;
+        if (progressBar) progressBar.style.width = `${pct}%`;
+        if (thumb) thumb.style.left = `${pct}%`;
+        if (currentLabel) currentLabel.textContent = formatTime(video.currentTime);
+      }
+    });
+
+    const updateDuration = () => {
+      if (video.duration && durationLabel) {
+        durationLabel.textContent = formatTime(video.duration);
+      }
+    };
+    video.addEventListener('durationchange', updateDuration);
+    video.addEventListener('loadedmetadata', updateDuration);
+
+    const updateBuffer = () => {
+      if (video.buffered && video.buffered.length > 0 && video.duration && bufferBar) {
+        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+        const pct = Math.min(100, (bufferedEnd / video.duration) * 100);
+        bufferBar.style.width = `${pct}%`;
+      }
+    };
+    video.addEventListener('progress', updateBuffer);
+    video.addEventListener('timeupdate', updateBuffer);
+
+    // Timeline Drag & Scrubbing
+    function seekTo(e) {
+      if (!timeline) return;
+      const rect = timeline.getBoundingClientRect();
+      const clientX = (e.touches && e.touches.length) ? e.touches[0].clientX : e.clientX;
+      let pos = (clientX - rect.left) / rect.width;
+      pos = Math.max(0, Math.min(1, pos));
+      if (progressBar) progressBar.style.width = `${pos * 100}%`;
+      if (thumb) thumb.style.left = `${pos * 100}%`;
+      if (video.duration) {
+        video.currentTime = pos * video.duration;
+        if (currentLabel) currentLabel.textContent = formatTime(video.currentTime);
+      }
+    }
+
+    const onMouseDown = (e) => {
+      isDragging = true;
+      seekTo(e);
+      resetHideTimer();
+    };
+    const onMouseMove = (e) => {
+      if (isDragging) seekTo(e);
+    };
+    const onMouseUp = () => {
+      if (isDragging) {
+        isDragging = false;
+        resetHideTimer();
+      }
+    };
+
+    const onTouchStart = (e) => {
+      isDragging = true;
+      seekTo(e);
+      resetHideTimer();
+    };
+    const onTouchMove = (e) => {
+      if (isDragging) seekTo(e);
+    };
+    const onTouchEnd = () => {
+      if (isDragging) {
+        isDragging = false;
+        resetHideTimer();
+      }
+    };
+
+    timeline.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+
+    timeline.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd);
+
+    // Double Tap Skip System
+    let lastTapLeft = 0;
+    let lastTapRight = 0;
+
+    if (zoneLeft) {
+      zoneLeft.addEventListener('click', (e) => {
+        const now = Date.now();
+        if (now - lastTapLeft < 300) {
+          // Double tap detected
+          video.currentTime = Math.max(0, video.currentTime - 10);
+          if (indLeft) {
+            indLeft.classList.add('active');
+            setTimeout(() => indLeft.classList.remove('active'), 500);
+          }
+          showOverlay();
+          lastTapLeft = 0;
+        } else {
+          lastTapLeft = now;
+          setTimeout(() => {
+            if (lastTapLeft === now) toggleOverlay();
+          }, 300);
+        }
+      });
+    }
+
+    if (zoneRight) {
+      zoneRight.addEventListener('click', (e) => {
+        const now = Date.now();
+        if (now - lastTapRight < 300) {
+          // Double tap detected
+          video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 10);
+          if (indRight) {
+            indRight.classList.add('active');
+            setTimeout(() => indRight.classList.remove('active'), 500);
+          }
+          showOverlay();
+          lastTapRight = 0;
+        } else {
+          lastTapRight = now;
+          setTimeout(() => {
+            if (lastTapRight === now) toggleOverlay();
+          }, 300);
+        }
+      });
+    }
+
+    // Tap on overlay background toggles overlay
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.classList.contains('player-center-controls')) {
+        toggleOverlay();
+      }
+    });
+
+    // Fullscreen Toggle
+    if (fullscreenBtn) {
+      fullscreenBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wrap = document.getElementById('customPlayerViewport');
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          if (wrap && wrap.requestFullscreen) {
+            wrap.requestFullscreen().catch(() => {
+              if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+            });
+          } else if (wrap && wrap.webkitRequestFullscreen) {
+            wrap.webkitRequestFullscreen();
+          } else if (video.webkitEnterFullscreen) {
+            video.webkitEnterFullscreen();
+          }
+        } else {
+          if (document.exitFullscreen) {
+            document.exitFullscreen();
+          } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+          }
+        }
+        resetHideTimer();
+      });
+    }
+
+    // Register cleanup callback
+    customPlayerCleanup = () => {
+      clearTimeout(hideTimer);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+
+    updatePlayPauseIcons();
+    updateDuration();
+    showOverlay();
+  }
+
   function bindWatchEvents() {
     videoEl = document.getElementById("mainVideoPlayer") || document.getElementById("mainVideo");
-    playerSpinner = document.getElementById("playerSpinner");
-    playerBigPlayBtn = document.getElementById("playerBigPlayBtn");
+    playerSpinner = document.getElementById("playerBufferSpinner");
     playerErrorOverlay = document.getElementById("playerErrorOverlay");
     playerRetryBtn = document.getElementById("playerRetryBtn");
     playerErrorMsg = document.getElementById("playerErrorMsg");
@@ -230,37 +576,10 @@ window.UltraVid = window.UltraVid || {};
     const wMeta = document.getElementById("wMeta");
 
     if (videoEl) {
-      videoEl.addEventListener("waiting", () => {
-        if (playerSpinner) playerSpinner.classList.remove("hidden");
-      });
-      videoEl.addEventListener("playing", () => {
-        if (playerSpinner) playerSpinner.classList.add("hidden");
-        if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
-        hidePlayerErrorState();
-      });
-      videoEl.addEventListener("canplay", () => {
-        if (playerSpinner) playerSpinner.classList.add("hidden");
-      });
       videoEl.addEventListener("error", () => {
-        if (playerSpinner) playerSpinner.classList.add("hidden");
+        hideBufferSpinner();
       });
-    }
-
-    if (playerBigPlayBtn) {
-      playerBigPlayBtn.onclick = () => {
-        if (videoEl) {
-          const p = videoEl.play();
-          if (p !== undefined) {
-            p.then(() => {
-              if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
-              if (playerSpinner) playerSpinner.classList.add("hidden");
-              hidePlayerErrorState();
-            }).catch(err => {
-              console.warn("Manual play attempt failed:", err);
-            });
-          }
-        }
-      };
+      initializeCustomPlayer(videoEl);
     }
 
     if (playerRetryBtn) {
@@ -375,8 +694,7 @@ window.UltraVid = window.UltraVid || {};
 
   function showPlayerErrorState(item, msg = "An error occurred. Please try again.") {
     lastFailedItem = item;
-    if (playerSpinner) playerSpinner.classList.add("hidden");
-    if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+    hideBufferSpinner();
     if (playerErrorMsg) playerErrorMsg.textContent = msg;
     if (playerErrorOverlay) playerErrorOverlay.classList.remove("hidden");
   }
@@ -601,8 +919,7 @@ window.UltraVid = window.UltraVid || {};
     }
 
     // Set player state to LOADING
-    if (playerSpinner) playerSpinner.classList.remove("hidden");
-    if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+    showBufferSpinner();
     hidePlayerErrorState();
 
     // Update read-only like stat pill if preview has count
@@ -673,18 +990,16 @@ window.UltraVid = window.UltraVid || {};
       if (playPromise !== undefined) {
         playPromise.then(() => {
           if (thisToken !== null && thisToken !== currentPlaybackToken) return;
-          if (playerSpinner) playerSpinner.classList.add("hidden");
-          if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+          hideBufferSpinner();
           hidePlayerErrorState();
         }).catch(err => {
           if (thisToken !== null && thisToken !== currentPlaybackToken) return;
           console.warn("Autoplay blocked or deferred by browser policy:", err);
-          if (playerSpinner) playerSpinner.classList.add("hidden");
-          if (playerBigPlayBtn) playerBigPlayBtn.classList.remove("hidden");
+          hideBufferSpinner();
         });
       }
     } else {
-      if (playerSpinner) playerSpinner.classList.add("hidden");
+      hideBufferSpinner();
       if (!defUrl) {
         showPlayerErrorState(currentData || { url }, "No playable stream found for this video.");
         return;
@@ -783,6 +1098,11 @@ window.UltraVid = window.UltraVid || {};
       currentBufferCheckCleanup = null;
     }
 
+    if (customPlayerCleanup) {
+      customPlayerCleanup();
+      customPlayerCleanup = null;
+    }
+
     closeDescriptionSheet();
     closeQualityPicker();
     document.body.classList.remove('watch-route-active');
@@ -793,8 +1113,7 @@ window.UltraVid = window.UltraVid || {};
       player.removeAttribute("src");
       player.load();
     }
-    if (playerSpinner) playerSpinner.classList.add("hidden");
-    if (playerBigPlayBtn) playerBigPlayBtn.classList.add("hidden");
+    hideBufferSpinner();
     hidePlayerErrorState();
 
     const watchViewEl = document.getElementById("watchView") || watchView;
@@ -1042,6 +1361,8 @@ window.UltraVid = window.UltraVid || {};
   window.UltraVid.player = {
     init,
     renderWatchView,
+    initializeCustomPlayer,
+    formatTime,
     loadAndPlay,
     openWatch,
     hydrateWatchDetails,
