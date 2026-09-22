@@ -966,26 +966,62 @@ window.UltraVid = window.UltraVid || {};
       try { activeAbortControllers[key].abort(); } catch (e) {}
       delete activeAbortControllers[key];
     }
-    state.isFetching = false;
-    state.fetchStartTime = 0;
-    state.epoch = (state.epoch || 0) + 1;
     clearTimeout(safetyTimers[key]);
 
+    const abortController = new AbortController();
+    state.abortController = abortController;
+    activeAbortControllers[key] = abortController;
+
+    state.isFetching = true;
+    state.fetchStartTime = Date.now();
+    const thisEpoch = ++state.epoch;
+    state.seed = Math.floor(Math.random() * 100000);
+
+    const categoryParam = key === 'trending' ? 'trending' : key;
     const container = document.getElementById(state.elId);
 
-    // 2. Non-Destructive Queue Flush (If items in RAM queue, prepend them in 0ms)
-    if (state.queue && state.queue.length > 0) {
-      const freshBatch = state.queue.splice(0, Math.min(6, state.queue.length));
-      if (container && freshBatch.length > 0) {
-        const skeletons = container.querySelectorAll('.skeleton-card');
-        skeletons.forEach(s => s.remove());
+    // Zero-Blackout: Keep existing cards visible while in-flight.
+    // If container was completely empty, show skeletons
+    const existingCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
+    if (existingCards === 0 && container && !container.querySelector('.skeleton-card')) {
+      container.innerHTML = getSkeletonMarkup(4);
+    }
 
+    try {
+      const resp = (window.ApiService && typeof window.ApiService.getFeed === 'function')
+        ? await window.ApiService.getFeed(categoryParam, 1, 12, {
+            refresh: true,
+            seed: state.seed,
+            signal: abortController.signal
+          })
+        : await window.UltraVid.api.fetchFeed({
+            page: 1,
+            limit: 12,
+            seed: state.seed,
+            category: categoryParam,
+            refresh: true,
+            signal: abortController.signal
+          }, { signal: abortController.signal });
+
+      if (thisEpoch !== state.epoch) return;
+
+      const rawItems = (resp && Array.isArray(resp.results)) ? resp.results : [];
+
+      if (rawItems.length > 0 && container) {
+        // Reset category state machine for fresh epoch
+        state.seenIds.clear();
+        rawItems.forEach(it => {
+          if (it.id) state.seenIds.add(it.id);
+        });
+        state.queue = [];
+        state.page = 2;
+        state.hasMore = true;
+        state.emptyCount = 0;
+        state.initialized = true;
+
+        // Build fresh cards fragment
         const fragment = document.createDocumentFragment();
-        freshBatch.forEach(item => {
-          if (item && item.id) {
-            const escapedId = window.CSS && window.CSS.escape ? window.CSS.escape(item.id) : item.id;
-            if (container.querySelector(`[data-vid="${escapedId}"]`)) return;
-          }
+        rawItems.forEach(item => {
           const card = (window.CardComponent && typeof window.CardComponent.createCard === 'function')
             ? window.CardComponent.createCard(item, itemCallbacks)
             : (window.UltraVid && window.UltraVid.card ? window.UltraVid.card.createCard(item, itemCallbacks) : null);
@@ -997,41 +1033,44 @@ window.UltraVid = window.UltraVid || {};
             fragment.appendChild(card);
           }
         });
-        container.insertBefore(fragment, container.firstChild);
+
+        // ATOMIC DOM REPLACEMENT: single tick wipe & append to eliminate phantom deduplication
+        container.innerHTML = '';
+        container.appendChild(fragment);
         refreshIcons();
+        prefetchThumbnails(rawItems);
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        if (isKeyActive(key)) {
+          updateCardObserver(key);
+          setupSentinelObserver();
+        }
+
+        // Proactively prefetch Page 2 in background for seamless infinite scroll
+        if (state.hasMore) {
+          fetchBatch(key, 2);
+        }
+      } else if (rawItems.length === 0 && existingCards === 0 && container) {
+        showFeedError(key);
       }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      if (e && (e.name === 'AbortError' || (e.message && e.message.includes('aborted')))) {
+        return;
+      }
+      console.error(`[FeedEngine] Refresh failed for [${key}]:`, e);
+      if (existingCards === 0 && container) {
+        showFeedError(key);
+      }
+    } finally {
+      if (thisEpoch === state.epoch) {
+        state.isFetching = false;
+        state.abortController = null;
+        if (activeAbortControllers[key] === abortController) {
+          delete activeAbortControllers[key];
+        }
+      }
       reconcileFeedViewport(key);
-      // Silently fetch background batch
-      if (state.queue.length <= 4 && state.hasMore) {
-        fetchBatch(key, state.page);
-      }
-      return;
     }
-
-    // 3. If queue is dry, DO NOT purge existing cards (Zero-Blackout Guarantee).
-    // If container is completely empty (no cards), show skeleton placeholders
-    const existingCards = container ? container.querySelectorAll('.card:not(.skeleton-card)').length : 0;
-    if (existingCards === 0 && container && !container.querySelector('.skeleton-card')) {
-      container.innerHTML = getSkeletonMarkup(4);
-    }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    state.page = 1;
-    state.seenIds.clear();
-    await fetchBatch(key, 1);
-
-    if (container) {
-      const skeletons = container.querySelectorAll('.skeleton-card');
-      skeletons.forEach(s => s.remove());
-      if (state.queue.length > 0) {
-        renderNext(key, 0);
-      }
-      state.initialized = true;
-      if (state.hasMore && !state.isFetching) {
-        fetchBatch(key, 2);
-      }
-    }
-    reconcileFeedViewport(key);
   }
 
   // Global Inspector Utility
@@ -1047,7 +1086,14 @@ window.UltraVid = window.UltraVid || {};
   window.ApiService = window.ApiService || {
     getFeed: (cat, page = 1, limit = 10, opts = {}) => {
       if (window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.fetchFeed === 'function') {
-        return window.UltraVid.api.fetchFeed({ category: cat, page, limit, signal: opts && opts.signal }, opts);
+        return window.UltraVid.api.fetchFeed({
+          category: cat,
+          page,
+          limit,
+          seed: opts && opts.seed !== undefined ? opts.seed : 0,
+          refresh: Boolean(opts && opts.refresh),
+          signal: opts && opts.signal
+        }, opts);
       }
       return Promise.reject(new Error("API not available"));
     }

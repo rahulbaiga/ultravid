@@ -111,7 +111,7 @@ window.UltraVid = window.UltraVid || {};
 
   async function fetchFeed(params = {}, opts = {}) {
     const signal = params.signal || (opts && opts.signal);
-    const { page = 1, limit = 12, seed = 0, category = 'all' } = params;
+    const { page = 1, limit = 12, seed = 0, category = 'all', refresh = false } = params;
     const qs = new URLSearchParams({
       page: String(page),
       limit: String(limit),
@@ -119,6 +119,9 @@ window.UltraVid = window.UltraVid || {};
       category: category || 'all',
       t: String(Date.now())
     });
+    if (refresh) {
+      qs.set('refresh', 'true');
+    }
     return fetchApi(`/api/feed?${qs.toString()}`, { signal });
   }
 

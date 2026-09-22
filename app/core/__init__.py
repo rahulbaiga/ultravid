@@ -9,7 +9,14 @@ from app.core.config import (
     STATIC_DIR,
     DOWNLOAD_DIR,
 )
-from app.core.cache import get_cached_feed, set_cached_feed, clear_expired_cache, FEED_CACHE, CACHE_TTL
+from app.core.cache import (
+    get_cached_feed,
+    set_cached_feed,
+    clear_expired_cache,
+    invalidate_feed_cache,
+    FEED_CACHE,
+    CACHE_TTL,
+)
 
 __all__ = [
     "APP_TITLE",
@@ -23,6 +30,7 @@ __all__ = [
     "get_cached_feed",
     "set_cached_feed",
     "clear_expired_cache",
+    "invalidate_feed_cache",
     "FEED_CACHE",
     "CACHE_TTL",
 ]

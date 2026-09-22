@@ -42,22 +42,22 @@ async def search_innertube(query: str, limit: int = 10, page: int = 1) -> List[D
         return []
 
 
-async def standard_feed_fetch(category: str, page: int = 1, limit: int = 12) -> List[Dict[str, Any]]:
+async def standard_feed_fetch(category: str, page: int = 1, limit: int = 12, seed: int = 0) -> List[Dict[str, Any]]:
     """Standard fallback feed fetch for un-taxonomized categories like 'all'."""
     try:
-        resp = await fast_feed(page=page, limit=limit, category=category)
+        resp = await fast_feed(page=page, limit=limit, seed=seed, category=category)
         return (resp.get("results", []) if isinstance(resp, dict) else []) or []
     except Exception:
         return []
 
 
-async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 12) -> List[Dict[str, Any]]:
+async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 12, seed: int = 0) -> List[Dict[str, Any]]:
     """Asynchronously multiplexes across category sub-taxonomies with round-robin interleaving and anti-clustering re-ranking."""
     norm_cat = (category or "all").lower().strip()
 
     # 'all' and 'trending' use native home/trending feed fetch
     if norm_cat in ("all", "trending"):
-        return await standard_feed_fetch(norm_cat, page=page, limit=limit)
+        return await standard_feed_fetch(norm_cat, page=page, limit=limit, seed=seed)
 
     sub_taxonomies = CATEGORY_TAXONOMY.get(norm_cat)
     if not sub_taxonomies:
@@ -69,10 +69,10 @@ async def get_diverse_category_feed(category: str, page: int = 1, limit: int = 1
             {"sub": "curated", "query": f"{norm_cat} top rated documentary features"},
         ]
 
-    # Rotate sub-topics according to page offset to guarantee variety across pages
+    # Rotate sub-topics according to page offset and seed to guarantee variety across pages and refreshes
     num_subtopics = len(sub_taxonomies)
     subtopics_per_page = min(4, num_subtopics)
-    offset = ((page - 1) * 2) % num_subtopics
+    offset = ((page - 1) * 2 + int(seed or 0)) % num_subtopics
     selected_subs = [sub_taxonomies[(offset + i) % num_subtopics] for i in range(subtopics_per_page)]
 
     # Asynchronously fetch candidates across all selected sub-topics in parallel

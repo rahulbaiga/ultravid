@@ -26,3 +26,15 @@ def clear_expired_cache() -> None:
     keys_to_del = [k for k, v in FEED_CACHE.items() if now - v[0] >= CACHE_TTL]
     for k in keys_to_del:
         FEED_CACHE.pop(k, None)
+
+
+def invalidate_feed_cache(category: Optional[str] = None) -> None:
+    """Invalidate cache entries for a specific category, or all categories if None/empty."""
+    if not category:
+        FEED_CACHE.clear()
+        return
+    norm = category.lower().strip()
+    keys_to_del = [k for k in list(FEED_CACHE.keys()) if k[0] == norm]
+    for k in keys_to_del:
+        FEED_CACHE.pop(k, None)
+

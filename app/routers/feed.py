@@ -4,8 +4,9 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
+import time
 from app.models.feed import SearchResponse
-from app.core.cache import get_cached_feed, set_cached_feed
+from app.core.cache import get_cached_feed, set_cached_feed, invalidate_feed_cache
 from app.services.innertube import get_diverse_category_feed, fast_feed, get_category_reserve, CATEGORY_TAXONOMY
 
 logger = logging.getLogger("ultravid.feed")
@@ -18,6 +19,7 @@ async def api_feed(
     limit: int = 12,
     seed: int = 0,
     category: Optional[str] = None,
+    refresh: bool = False,
     t: Optional[str] = None,
 ):
     try:
@@ -25,18 +27,25 @@ async def api_feed(
         page = max(1, int(page or 1))
         norm_cat = (category or "all").lower().strip()
 
-        # 1. Check in-memory 15-minute TTL cache first
-        cached = get_cached_feed(norm_cat, page)
-        if cached and cached.get("results"):
-            return {
-                "query": cached.get("query", f"feed:{norm_cat}"),
-                "results": cached["results"][:limit],
-            }
+        # If refresh requested, invalidate in-memory cache and randomize seed
+        if refresh:
+            invalidate_feed_cache(norm_cat)
+            if seed == 0:
+                seed = int(time.time() * 1000) % 100000
+
+        # 1. Check in-memory 15-minute TTL cache first (only when not refreshing)
+        if not refresh:
+            cached = get_cached_feed(norm_cat, page)
+            if cached and cached.get("results"):
+                return {
+                    "query": cached.get("query", f"feed:{norm_cat}"),
+                    "results": cached["results"][:limit],
+                }
 
         # 2. Multi-query taxonomy multiplexing with anti-clustering re-ranking
         try:
             items = await asyncio.wait_for(
-                get_diverse_category_feed(norm_cat, page=page, limit=limit),
+                get_diverse_category_feed(norm_cat, page=page, limit=limit, seed=seed),
                 timeout=15.0,
             )
             if items:
@@ -65,7 +74,7 @@ async def api_feed(
         # 4. Fallback to category-isolated reserve cache (0ms latency, guaranteed items with rotation)
         res = get_category_reserve(norm_cat)
         if res:
-            rot = ((page - 1) * limit) % max(1, len(res))
+            rot = ((page - 1 + int(seed or 0)) * limit) % max(1, len(res))
             rotated = res[rot:] + res[:rot]
             sub_taxonomies = CATEGORY_TAXONOMY.get(norm_cat, [])
             tagged_rotated = []

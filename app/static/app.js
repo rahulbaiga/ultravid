@@ -223,26 +223,30 @@
 
     if (pullDistance >= PULL_THRESHOLD) {
       if (spinner) spinner.style.top = '70px';
-      // Trigger 0ms instant optimistic refresh
       const activeCat = window.currentActiveCategory
         || (window.UltraVid && window.UltraVid.chips && typeof window.UltraVid.chips.getCategory === 'function' ? window.UltraVid.chips.getCategory() : null)
         || 'all';
       const feed = (window.UltraVid && window.UltraVid.feed) || window.FeedComponent;
-      if (feed && typeof feed.optimisticRefresh === 'function') {
-        await feed.optimisticRefresh(activeCat);
-      } else if (window.FeedComponent && typeof window.FeedComponent.optimisticRefresh === 'function') {
-        await window.FeedComponent.optimisticRefresh(activeCat);
+      try {
+        if (feed && typeof feed.optimisticRefresh === 'function') {
+          await feed.optimisticRefresh(activeCat);
+        } else if (window.FeedComponent && typeof window.FeedComponent.optimisticRefresh === 'function') {
+          await window.FeedComponent.optimisticRefresh(activeCat);
+        }
+      } catch (err) {
+        console.warn('[PTR] Refresh failed:', err);
+      } finally {
+        if (spinner) {
+          spinner.style.top = '-50px';
+          setTimeout(() => spinner.classList.remove('visible'), 250);
+        }
       }
-    }
-
-    // Dismiss spinner cleanly
-    clearTimeout(ptrDismissTimer);
-    ptrDismissTimer = setTimeout(() => {
+    } else {
       if (spinner) {
         spinner.style.top = '-50px';
         setTimeout(() => spinner.classList.remove('visible'), 200);
       }
-    }, 300);
+    }
   }, { passive: true });
 
   function bootstrap() {
