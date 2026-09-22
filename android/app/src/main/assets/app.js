@@ -333,6 +333,7 @@
         } else {
           feed.switchCategory("all");
         }
+        resetChrome();
         window.scrollTo({ top: 0, behavior: "smooth" });
       },
       onClear: () => {}
@@ -352,16 +353,19 @@
         player.pause();
         header.setValue("");
         header.hideSuggestions();
+        resetChrome();
       },
       onTrending: () => {
         player.pause();
         header.setValue("");
         header.hideSuggestions();
+        resetChrome();
       },
       onLibrary: () => {
         player.pause();
         header.setValue("");
         header.hideSuggestions();
+        resetChrome();
       }
     });
 
@@ -387,6 +391,90 @@
 
     window.UltraVid.doSearch = doSearch;
   }
+
+  function resetChrome() {
+    const topHeader = document.getElementById('header') || document.querySelector('.app-header');
+    const bottomNav = document.getElementById('bottomNav') || document.getElementById('bottom-nav') || document.querySelector('.bottom-nav');
+    if (topHeader) topHeader.classList.remove('chrome-hidden-top');
+    if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
+  }
+
+  // ==========================================
+  // YOUTUBE-STYLE VELOCITY NAVIGATION CHROME
+  // ==========================================
+  (function initNavigationChromeController() {
+    function setup() {
+      const topHeader = document.getElementById('header') || document.querySelector('.app-header');
+      const bottomNav = document.getElementById('bottomNav') || document.getElementById('bottom-nav') || document.querySelector('.bottom-nav');
+
+      if (!topHeader && !bottomNav) return;
+
+      let lastScrollY = window.scrollY || 0;
+      let lastTimestamp = performance.now();
+      let ticking = false;
+
+      // Threshold configurations
+      const DEAD_ZONE = 8;           // Minimum pixel delta to ignore micro-jitters
+      const TOP_PIN_THRESHOLD = 25;  // Always show both chrome bars at top
+      const FAST_VELOCITY_THRESHOLD = 0.85; // px/ms threshold for fast fling upward
+
+      function updateChrome(currentScrollY, deltaY, velocity) {
+        // 1. Near the very top: Always reveal both
+        if (currentScrollY <= TOP_PIN_THRESHOLD) {
+          if (topHeader) topHeader.classList.remove('chrome-hidden-top');
+          if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
+          return;
+        }
+
+        // Ignore tiny accidental micro-movements
+        if (Math.abs(deltaY) < DEAD_ZONE) return;
+
+        if (deltaY > 0) {
+          // SCROLL DOWN: Hide both top header and bottom nav
+          if (topHeader) topHeader.classList.add('chrome-hidden-top');
+          if (bottomNav) bottomNav.classList.add('chrome-hidden-bottom');
+        } else {
+          // SCROLL UP: deltaY < 0
+          const absVelocity = Math.abs(velocity);
+
+          // Top header ALWAYS shows on any upward scroll
+          if (topHeader) topHeader.classList.remove('chrome-hidden-top');
+
+          if (absVelocity >= FAST_VELOCITY_THRESHOLD) {
+            // FAST SCROLL UP: Reveal bottom navigation bar as well
+            if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
+          } else {
+            // SLOW SCROLL UP: Keep bottom nav hidden, reveal header only
+            if (bottomNav) bottomNav.classList.add('chrome-hidden-bottom');
+          }
+        }
+      }
+
+      window.addEventListener('scroll', () => {
+        const currentScrollY = window.scrollY || 0;
+        const now = performance.now();
+        const deltaY = currentScrollY - lastScrollY;
+        const deltaTime = Math.max(1, now - lastTimestamp);
+        const velocity = deltaY / deltaTime; // px per ms
+
+        if (!ticking) {
+          window.requestAnimationFrame(() => {
+            updateChrome(currentScrollY, deltaY, velocity);
+            lastScrollY = currentScrollY;
+            lastTimestamp = now;
+            ticking = false;
+          });
+          ticking = true;
+        }
+      }, { passive: true });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setup);
+    } else {
+      setup();
+    }
+  })();
 
   document.addEventListener("DOMContentLoaded", bootstrap);
 })();
