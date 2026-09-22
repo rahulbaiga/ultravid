@@ -399,10 +399,10 @@
     if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
   }
 
-  // ==========================================
-  // YOUTUBE-STYLE VELOCITY NAVIGATION CHROME
-  // ==========================================
-  (function initNavigationChromeController() {
+  // =======================================================
+  // YOUTUBE-IDENTICAL DIRECTION-LATCHED CHROME CONTROLLER
+  // =======================================================
+  (function initYouTubeNavigationChrome() {
     function setup() {
       const topHeader = document.getElementById('header') || document.querySelector('.app-header');
       const bottomNav = document.getElementById('bottomNav') || document.getElementById('bottom-nav') || document.querySelector('.bottom-nav');
@@ -410,58 +410,48 @@
       if (!topHeader && !bottomNav) return;
 
       let lastScrollY = window.scrollY || 0;
-      let lastTimestamp = performance.now();
       let ticking = false;
 
       // Threshold configurations
-      const DEAD_ZONE = 8;           // Minimum pixel delta to ignore micro-jitters
-      const TOP_PIN_THRESHOLD = 25;  // Always show both chrome bars at top
-      const FAST_VELOCITY_THRESHOLD = 0.85; // px/ms threshold for fast fling upward
+      const SCROLL_DELTA_THRESHOLD = 6;  // Minimum pixel movement to filter micro-jitters
+      const TOP_PIN_LIMIT = 25;          // Always keep pinned visible at top of page
 
-      function updateChrome(currentScrollY, deltaY, velocity) {
-        // 1. Near the very top: Always reveal both
-        if (currentScrollY <= TOP_PIN_THRESHOLD) {
+      function updateChromeState(currentScrollY) {
+        // 1. Near the very top of the page: strictly pin both visible
+        if (currentScrollY <= TOP_PIN_LIMIT) {
           if (topHeader) topHeader.classList.remove('chrome-hidden-top');
           if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
+          lastScrollY = currentScrollY;
           return;
         }
 
-        // Ignore tiny accidental micro-movements
-        if (Math.abs(deltaY) < DEAD_ZONE) return;
+        const deltaY = currentScrollY - lastScrollY;
+
+        // Filter tiny accidental vibrations or bounce noise
+        if (Math.abs(deltaY) < SCROLL_DELTA_THRESHOLD) {
+          return;
+        }
 
         if (deltaY > 0) {
-          // SCROLL DOWN: Hide both top header and bottom nav
+          // 2. SCROLLING DOWN: Dismiss chrome into immersive mode
           if (topHeader) topHeader.classList.add('chrome-hidden-top');
           if (bottomNav) bottomNav.classList.add('chrome-hidden-bottom');
         } else {
-          // SCROLL UP: deltaY < 0
-          const absVelocity = Math.abs(velocity);
-
-          // Top header ALWAYS shows on any upward scroll
+          // 3. SCROLLING UP: Reveal chrome immediately and LATCH it visible
+          // INVARIANT: Stays completely visible; never hides on deceleration or stopping!
           if (topHeader) topHeader.classList.remove('chrome-hidden-top');
-
-          if (absVelocity >= FAST_VELOCITY_THRESHOLD) {
-            // FAST SCROLL UP: Reveal bottom navigation bar as well
-            if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
-          } else {
-            // SLOW SCROLL UP: Keep bottom nav hidden, reveal header only
-            if (bottomNav) bottomNav.classList.add('chrome-hidden-bottom');
-          }
+          if (bottomNav) bottomNav.classList.remove('chrome-hidden-bottom');
         }
+
+        lastScrollY = currentScrollY;
       }
 
+      // Optimized passive scroll listener bound to requestAnimationFrame
       window.addEventListener('scroll', () => {
         const currentScrollY = window.scrollY || 0;
-        const now = performance.now();
-        const deltaY = currentScrollY - lastScrollY;
-        const deltaTime = Math.max(1, now - lastTimestamp);
-        const velocity = deltaY / deltaTime; // px per ms
-
         if (!ticking) {
           window.requestAnimationFrame(() => {
-            updateChrome(currentScrollY, deltaY, velocity);
-            lastScrollY = currentScrollY;
-            lastTimestamp = now;
+            updateChromeState(currentScrollY);
             ticking = false;
           });
           ticking = true;
