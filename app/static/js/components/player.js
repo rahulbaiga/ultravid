@@ -46,6 +46,8 @@ window.UltraVid = window.UltraVid || {};
   let currentPlaybackToken = 0;
   let lastFailedItem = null;
   let currentBufferCheckCleanup = null;
+  let currentAvailableQualities = [];
+  let activeQualityIndex = 0;
 
   function init(callbacks = {}) {
     homeView = document.getElementById("tab-home") || document.getElementById("homeView");
@@ -131,7 +133,7 @@ window.UltraVid = window.UltraVid || {};
           </div>
           <div id="watchDescription" class="watch-description hidden" style="font-size:12px;color:#ccc;line-height:1.4;margin:8px 0;background:rgba(255,255,255,0.05);padding:10px 12px;border-radius:8px;white-space:pre-wrap;"></div>
 
-          <!-- 3. Channel Row & Subscribe Pill -->
+          <!-- 3. Channel Row -->
           <div class="watch-channel-row">
             <div class="channel-info-left">
               <div class="channel-avatar-img" id="wAvatar" style="display:flex;align-items:center;justify-content:center;font-weight:bold;color:#fff;">
@@ -142,7 +144,6 @@ window.UltraVid = window.UltraVid || {};
                 <span class="channel-sub-count" id="wSubCount">${subCount}</span>
               </div>
             </div>
-            <button class="btn-youtube-subscribe" id="subscribeBtn">Subscribe</button>
           </div>
 
           <!-- 4. Action Pills Bar -->
@@ -225,7 +226,6 @@ window.UltraVid = window.UltraVid || {};
     shareBtn = document.getElementById("shareBtn");
     const downloadActionBtn = document.getElementById("downloadActionBtn");
     const qualitySelectorBtn = document.getElementById("qualitySelectorBtn");
-    const subscribeBtn = document.getElementById("subscribeBtn");
     const commentsTeaserCard = document.getElementById("commentsTeaserCard");
     const metaMoreBtn = document.getElementById("metaMoreBtn");
 
@@ -276,21 +276,6 @@ window.UltraVid = window.UltraVid || {};
       };
     }
 
-    if (subscribeBtn) {
-      let isSubscribed = false;
-      subscribeBtn.onclick = () => {
-        isSubscribed = !isSubscribed;
-        if (isSubscribed) {
-          subscribeBtn.textContent = 'Subscribed';
-          subscribeBtn.classList.add('subscribed');
-          showToast('Subscribed to ' + (currentData?.channel || currentData?.uploader || 'channel'));
-        } else {
-          subscribeBtn.textContent = 'Subscribe';
-          subscribeBtn.classList.remove('subscribed');
-          showToast('Subscription removed');
-        }
-      };
-    }
 
     if (likeBtn) {
       likeBtn.onclick = () => {
@@ -581,6 +566,8 @@ window.UltraVid = window.UltraVid || {};
   function openWatch(url, preview = null) {
     currentUrl = url;
     isWatchOpen = true;
+    currentAvailableQualities = [];
+    activeQualityIndex = 0;
 
     // Phase 1: Immediately cancel all pending background requests to guarantee 100% video bandwidth
     if (window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.abortAllBackgroundRequests === 'function') {
@@ -639,6 +626,24 @@ window.UltraVid = window.UltraVid || {};
     const activeH = (playables[0] && playables[0].height) || 720;
     const qLabel = document.getElementById("activeQualityLabel");
     if (qLabel) qLabel.textContent = `${activeH}p`;
+
+    // Dynamic multi-resolution YouTube stream resolver
+    const vidId = d.id || extractVideoId(url, d);
+    if (vidId) {
+      fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}`)
+        .then(res => res.json())
+        .then(resData => {
+          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+          if (resData && resData.qualities && resData.qualities.length) {
+            populateQualitySheet(resData.qualities, activeH);
+            const matched = resData.qualities.find(q => q.height === activeH) || resData.qualities[0];
+            if (matched && qLabel) {
+              qLabel.textContent = matched.resolution;
+            }
+          }
+        })
+        .catch(err => console.warn("Failed to resolve multi-qualities:", err));
+    }
 
     if (videoEl && defUrl) {
       videoEl.src = defUrl;
@@ -812,49 +817,108 @@ window.UltraVid = window.UltraVid || {};
     closeWatch();
   }
 
+  function populateQualitySheet(qualities, currentHeight) {
+    currentAvailableQualities = qualities || [];
+    const sheetList = document.getElementById('qualityOptionsList') || document.querySelector('.quality-options-container');
+    if (!sheetList) return;
+
+    if (!qualities || !qualities.length) {
+      sheetList.innerHTML = `<div class="mut" style="text-align:center;padding:16px;">Auto (Default stream)</div>`;
+      return;
+    }
+
+    if (currentHeight) {
+      const idx = currentAvailableQualities.findIndex(q => q.height === currentHeight);
+      if (idx !== -1) activeQualityIndex = idx;
+    }
+
+    sheetList.innerHTML = qualities.map((q, idx) => {
+      const isSelected = idx === activeQualityIndex || (currentHeight && q.height === currentHeight);
+      return `
+        <div class="quality-option-item ${isSelected ? 'active' : ''}" data-idx="${idx}">
+          <div class="quality-option-left">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09A1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span class="quality-label-text">${q.label || q.resolution}</span>
+          </div>
+          ${isSelected ? `<svg class="quality-check-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    // Bind quality switch action
+    sheetList.querySelectorAll('.quality-option-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const idx = parseInt(item.getAttribute('data-idx'), 10);
+        switchQuality(idx);
+      });
+    });
+  }
+
+  function switchQuality(index) {
+    const selected = currentAvailableQualities[index];
+    if (!selected) return;
+
+    activeQualityIndex = index;
+    const video = document.getElementById('mainVideoPlayer') || videoEl;
+    const labelEl = document.getElementById('activeQualityLabel');
+
+    if (labelEl) {
+      labelEl.textContent = selected.resolution;
+    }
+
+    if (video && selected.url) {
+      const currentTime = video.currentTime;
+      const isPaused = video.paused;
+
+      const playUrl = selected.url.startsWith('http') ? `/api/proxy?url=${encodeURIComponent(selected.url)}` : selected.url;
+      const restoreTime = () => {
+        try {
+          if (currentTime > 0) video.currentTime = currentTime;
+        } catch (e) {}
+      };
+      video.addEventListener('loadedmetadata', restoreTime, { once: true });
+      video.src = playUrl;
+      try {
+        video.currentTime = currentTime;
+      } catch (e) {}
+
+      if (!isPaused) {
+        video.play().catch(err => console.log('Autoplay after quality switch deferred:', err));
+      }
+      showToast(`Switched quality to ${selected.resolution}`);
+    }
+
+    // Close modal bottom sheet
+    closeQualityPicker();
+  }
+
   function openQualityPicker() {
     const overlay = document.getElementById('qualityOverlay');
     const sheet = document.getElementById('qualitySheet');
-    const list = document.getElementById('qualityOptionsList');
-    if (!overlay || !sheet || !list) return;
+    if (!overlay || !sheet) return;
 
-    list.innerHTML = '';
-    const d = currentData;
-    const playables = (d && ((d.playable_streams && d.playable_streams.length) ? d.playable_streams : (d.progressive_streams || []))) || [];
-
-    if (!playables.length) {
-      list.innerHTML = `<div class="mut" style="text-align:center;padding:12px;">Default stream active (auto)</div>`;
+    if (currentAvailableQualities && currentAvailableQualities.length > 0) {
+      populateQualitySheet(currentAvailableQualities);
     } else {
-      const sorted = [...playables].sort((a, b) => (b.height || 0) - (a.height || 0));
-      sorted.forEach(f => {
-        const pUrl = f.url && f.url.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(f.url)}` : (f.url || "");
-        const isSelected = videoEl && videoEl.src && (videoEl.src.includes(encodeURIComponent(f.url)) || videoEl.src === f.url || videoEl.src === pUrl);
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'qa-btn';
-        btn.style.justifyContent = 'space-between';
-        btn.innerHTML = `
-          <div style="display:flex;align-items:center;gap:12px;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            <span style="font-weight:${isSelected ? '700' : '500'};color:${isSelected ? '#fff' : '#f1f1f1'}">${f.height}p ${f.height >= 720 ? 'HD' : ''} • ${f.ext}</span>
-          </div>
-          ${isSelected ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
-        `;
-        btn.onclick = () => {
-          if (videoEl && pUrl) {
-            const ct = videoEl.currentTime;
-            videoEl.src = pUrl;
-            videoEl.currentTime = ct;
-            const p = videoEl.play();
-            if (p !== undefined) p.catch(() => {});
-            const qLabel = document.getElementById('activeQualityLabel');
-            if (qLabel) qLabel.textContent = `${f.height}p`;
-            showToast(`Switched quality to ${f.height}p`);
-          }
-          closeQualityPicker();
-        };
-        list.appendChild(btn);
-      });
+      const d = currentData;
+      const vidId = d ? (d.id || extractVideoId(currentUrl, d)) : null;
+      if (vidId) {
+        const list = document.getElementById('qualityOptionsList') || document.querySelector('.quality-options-container');
+        if (list) list.innerHTML = `<div class="mut" style="text-align:center;padding:16px;">Loading resolutions...</div>`;
+        fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}`)
+          .then(res => res.json())
+          .then(resData => {
+            if (resData && resData.qualities && resData.qualities.length) {
+              populateQualitySheet(resData.qualities);
+            }
+          })
+          .catch(() => {
+            if (list) list.innerHTML = `<div class="mut" style="text-align:center;padding:16px;">Auto (Default stream)</div>`;
+          });
+      }
     }
 
     overlay.classList.remove('hidden');
@@ -964,6 +1028,8 @@ window.UltraVid = window.UltraVid || {};
     closeWatch,
     teardownWatchUI,
     getIsWatchOpen: () => isWatchOpen,
+    populateQualitySheet,
+    switchQuality,
     openQualityPicker,
     closeQualityPicker,
     openDownloads,

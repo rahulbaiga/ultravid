@@ -562,28 +562,35 @@ body.watch-route-active main.wrap {
   color: #aaaaaa;
 }
 
-.btn-youtube-subscribe {
-  background: #f1f1f1;
-  color: #0f0f0f;
-  border: none;
-  border-radius: 18px;
-  padding: 0 16px;
-  height: 36px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  display: inline-flex;
+.quality-options-container {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.quality-option-item {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
+  justify-content: space-between;
+  padding: 14px 20px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-radius: 8px;
 }
-.btn-youtube-subscribe:active {
-  transform: scale(0.95);
-  opacity: 0.85;
+.quality-option-item:active {
+  background: rgba(255, 255, 255, 0.08);
 }
-.btn-youtube-subscribe.subscribed {
-  background: rgba(255, 255, 255, 0.12) !important;
-  color: #f1f1f1 !important;
+.quality-option-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 14px;
+  color: #f1f1f1;
+}
+.quality-option-item.active .quality-label-text {
+  color: #3ea6ff;
+  font-weight: 600;
 }
 
 /* 4. Action Pills Bar */
@@ -993,7 +1000,7 @@ body.watch-route-active main.wrap {
       <div class="qa-title">Quality for current video</div>
       <button type="button" id="qualityCloseBtn" class="clear-btn" style="font-size:16px">✕</button>
     </div>
-    <div id="qualityOptionsList" class="qa-options"></div>
+    <div id="qualityOptionsList" class="quality-options-container"></div>
   </div>
 </div>
 

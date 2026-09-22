@@ -53,6 +53,124 @@ async def api_extract(payload: ExtractRequest):
         raise HTTPException(status_code=400, detail=f"Extraction failed: {e}")
 
 
+# Standard resolution ordering for clean UX display
+QUALITY_ORDER = ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p"]
+
+
+def extract_all_qualities(video_id: str):
+    clean_id = extract_video_id(video_id) or video_id.strip()
+    url = f"https://www.youtube.com/watch?v={clean_id}"
+    formats = []
+    title = ""
+    duration = 0
+    hls_url = None
+
+    # 1. First query InnerTube fast_player_sync (bypasses YouTube datacenter/bot blocks)
+    try:
+        from app.innertube import fast_player_sync
+        turbo = fast_player_sync(clean_id)
+        if turbo:
+            title = turbo.get("title") or title
+            duration = turbo.get("duration") or duration
+            for s in (turbo.get("progressive_streams", []) + turbo.get("video_streams", [])):
+                formats.append(s)
+    except Exception:
+        pass
+
+    # 2. Fallback to yt_dlp if needed
+    if not formats:
+        try:
+            ydl_opts = {
+                'format': 'bestvideo+bestaudio/best',
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'skip_download': True,
+                'nocheckcertificate': True,
+                'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            }
+            import yt_dlp
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                formats = info.get('formats', [])
+                hls_url = info.get('manifest_url') or info.get('hls_manifest_url')
+                title = info.get('title') or title
+                duration = info.get('duration') or duration
+        except Exception:
+            pass
+
+    qualities_map = {}
+
+    # 3. Inspect all available formats
+    for f in formats:
+        height = f.get('height')
+        if not height:
+            continue
+        res_label = f"{height}p"
+        f_url = f.get('url')
+        if not f_url:
+            continue
+
+        # Prioritize formats with audio, or store best available format stream
+        is_progressive = f.get('vcodec') not in (None, 'none') and f.get('acodec') not in (None, 'none')
+        ext = f.get('ext', 'mp4')
+
+        if res_label not in qualities_map or is_progressive or (ext == 'mp4' and 'webm' in qualities_map[res_label].get('label', '')):
+            qualities_map[res_label] = {
+                "label": f"{res_label} • {ext}",
+                "resolution": res_label,
+                "height": height,
+                "url": f_url,
+                "format_id": f.get('format_id'),
+                "has_audio": f.get('acodec') not in (None, 'none')
+            }
+
+    # 4. Sort by highest resolution descending according to QUALITY_ORDER
+    sorted_qualities = []
+    for q in QUALITY_ORDER:
+        if q in qualities_map:
+            sorted_qualities.append(qualities_map[q])
+
+    for k, v in sorted(qualities_map.items(), key=lambda x: x[1].get('height', 0), reverse=True):
+        if v not in sorted_qualities:
+            sorted_qualities.append(v)
+
+    # Fallback if no formatted map generated
+    if not sorted_qualities:
+        sorted_qualities.append({
+            "label": "Auto (Default)",
+            "resolution": "auto",
+            "height": 720,
+            "url": f"/api/stream/{clean_id}",
+            "has_audio": True
+        })
+
+    return {
+        "id": clean_id,
+        "title": title,
+        "duration": duration,
+        "hls_manifest": hls_url,
+        "qualities": sorted_qualities,
+        "default_stream": sorted_qualities[0]["url"]
+    }
+
+
+@router.get("/stream/resolve")
+@router.get("/resolve")
+async def resolve_video_stream(
+    id: str = Query(None, description="YouTube Video ID"),
+    url: str = Query(None, description="YouTube Video URL")
+):
+    target = id or url
+    if not target:
+        raise HTTPException(status_code=400, detail="Video ID or URL parameter is required")
+    vid = extract_video_id(target) or target.strip()
+    try:
+        return await asyncio.to_thread(extract_all_qualities, vid)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to resolve video qualities: {str(e)}")
+
+
 @router.get("/stream", response_model=ExtractResponse)
 async def api_stream_get(url: str = Query(..., description="Video URL to stream")):
     return await api_extract(ExtractRequest(url=url))
