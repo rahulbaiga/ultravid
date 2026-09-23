@@ -69,6 +69,7 @@ def extract_all_qualities(video_id: str):
     like_count = 0
     upload_date = ""
     hls_url = None
+    best_audio_url = None
 
     # 1. First query InnerTube fast_player_sync (bypasses YouTube datacenter/bot blocks)
     try:
@@ -84,36 +85,53 @@ def extract_all_qualities(video_id: str):
             upload_date = turbo.get("upload_date") or upload_date
             for s in (turbo.get("progressive_streams", []) + turbo.get("video_streams", [])):
                 formats.append(s)
+            audio_s = turbo.get("audio_streams", [])
+            if audio_s:
+                m4a_audio = [a for a in audio_s if a.get("ext") == "m4a" and a.get("url")]
+                if m4a_audio:
+                    best_audio_url = m4a_audio[0].get("url")
+                elif audio_s[0].get("url"):
+                    best_audio_url = audio_s[0].get("url")
     except Exception:
         pass
 
-    # 2. Fallback to yt_dlp if needed (or to enrich metadata if missing)
-    if not formats or not description:
-        try:
-            ydl_opts = {
-                'format': 'bestvideo+bestaudio/best',
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-                'skip_download': True,
-                'nocheckcertificate': True,
-                'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            }
-            import yt_dlp
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not formats:
-                    formats = info.get('formats', [])
-                hls_url = hls_url or info.get('manifest_url') or info.get('hls_manifest_url')
-                title = title or info.get('title')
-                channel = channel or info.get('uploader') or info.get('channel')
-                duration = duration or info.get('duration')
-                description = description or info.get('description', '') or ''
-                view_count = view_count or info.get('view_count', 0)
-                like_count = like_count or info.get('like_count', 0)
-                upload_date = upload_date or info.get('upload_date', '') or info.get('release_date', '')
-        except Exception:
-            pass
+    # 2. Fallback / enrich with yt_dlp if needed (especially for HLS manifest and full audio tracks)
+    try:
+        ydl_opts = {
+            'format': 'bestvideo+bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'skip_download': True,
+            'nocheckcertificate': True,
+            'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        }
+        import yt_dlp
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            hls_url = hls_url or info.get('manifest_url') or info.get('hls_manifest_url')
+            title = title or info.get('title')
+            channel = channel or info.get('uploader') or info.get('channel')
+            duration = duration or info.get('duration')
+            description = description or info.get('description', '') or ''
+            view_count = view_count or info.get('view_count', 0)
+            like_count = like_count or info.get('like_count', 0)
+            upload_date = upload_date or info.get('upload_date', '') or info.get('release_date', '')
+
+            yt_formats = info.get('formats', [])
+            if not formats:
+                formats = yt_formats
+
+            # Standalone audio formats
+            audio_formats = [
+                f for f in yt_formats
+                if f.get('acodec') not in (None, 'none') and f.get('vcodec') in (None, 'none') and f.get('url')
+            ]
+            if audio_formats:
+                audio_formats.sort(key=lambda x: (x.get('ext') == 'm4a', x.get('abr') or 0), reverse=True)
+                best_audio_url = audio_formats[0].get('url') or best_audio_url
+    except Exception:
+        pass
 
     qualities_map = {}
 
@@ -138,7 +156,8 @@ def extract_all_qualities(video_id: str):
                 "height": height,
                 "url": f_url,
                 "format_id": f.get('format_id'),
-                "has_audio": f.get('acodec') not in (None, 'none')
+                "has_audio": is_progressive,
+                "audio_url": None if is_progressive else best_audio_url
             }
 
     # 4. Sort by highest resolution descending according to QUALITY_ORDER
@@ -154,11 +173,12 @@ def extract_all_qualities(video_id: str):
     # Fallback if no formatted map generated
     if not sorted_qualities:
         sorted_qualities.append({
-            "label": "Auto (Default)",
+            "label": "Auto",
             "resolution": "auto",
             "height": 720,
             "url": f"/api/stream/{clean_id}",
-            "has_audio": True
+            "has_audio": True,
+            "audio_url": None
         })
 
     return {
@@ -171,8 +191,9 @@ def extract_all_qualities(video_id: str):
         "like_count": like_count,
         "upload_date": upload_date,
         "hls_manifest": hls_url,
+        "audio_url": best_audio_url,
         "qualities": sorted_qualities,
-        "default_stream": sorted_qualities[0]["url"]
+        "default_stream": sorted_qualities[0]["url"] if sorted_qualities else None
     }
 
 

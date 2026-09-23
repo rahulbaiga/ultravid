@@ -49,6 +49,145 @@ window.UltraVid = window.UltraVid || {};
   let isLoopEnabled = false;
   let isScreenLocked = false;
   let currentPlaybackRate = 1.0;
+  let hlsInstance = null;
+  let companionAudio = null;
+
+  function ensureCompanionAudio() {
+    if (!companionAudio) {
+      companionAudio = document.getElementById('mainAudioPlayer');
+      if (!companionAudio) {
+        companionAudio = document.createElement('audio');
+        companionAudio.id = 'mainAudioPlayer';
+        companionAudio.style.display = 'none';
+        document.body.appendChild(companionAudio);
+      }
+    }
+    return companionAudio;
+  }
+
+  function bindDualStreamSync(video, audio) {
+    if (!video || !audio) return;
+    video.onplay = () => { if (audio.src) audio.play().catch(() => {}); };
+    video.onpause = () => { if (audio.src) audio.pause(); };
+    video.onseeking = () => { if (audio.src) audio.currentTime = video.currentTime; };
+    video.onseeked = () => { if (audio.src) audio.currentTime = video.currentTime; };
+    video.ontimeupdate = () => {
+      if (audio.src && !video.paused && Math.abs(video.currentTime - audio.currentTime) > 0.25) {
+        audio.currentTime = video.currentTime;
+      }
+    };
+  }
+
+  function loadDirectStream(video, qualityObj) {
+    if (!video || !qualityObj) return;
+    const audio = ensureCompanionAudio();
+    const curTime = video.currentTime || 0;
+    const isPaused = video.paused;
+
+    const rawUrl = qualityObj.url || '';
+    const playUrl = rawUrl ? (rawUrl.startsWith('http') ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : '';
+    if (playUrl) {
+      video.src = playUrl;
+      try {
+        video.currentTime = curTime;
+      } catch (e) {}
+    }
+
+    // If format is adaptive video-only, sync with companion audio stream
+    if (!qualityObj.has_audio && qualityObj.audio_url) {
+      const audioRaw = qualityObj.audio_url;
+      const audioUrl = audioRaw.startsWith('http') ? `/api/proxy?url=${encodeURIComponent(audioRaw)}` : audioRaw;
+      audio.src = audioUrl;
+      try {
+        audio.currentTime = curTime;
+      } catch (e) {}
+      bindDualStreamSync(video, audio);
+      if (!isPaused) audio.play().catch(() => {});
+    } else {
+      audio.pause();
+      audio.src = '';
+    }
+
+    if (!isPaused) {
+      video.play().catch(e => console.log('Playback resume:', e));
+    }
+  }
+
+  function populateHlsQualitySheet(levels) {
+    if (!levels || !levels.length) return;
+    const sortedLevels = levels.map((lvl, idx) => ({ ...lvl, originalIndex: idx }))
+                               .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+    const hlsQualities = [
+      { label: 'Auto (Recommended)', resolution: 'Auto', height: 0, hlsLevel: -1, has_audio: true },
+      ...sortedLevels.map(lvl => ({
+        label: `${lvl.height || lvl.name || 'Level'}p`,
+        resolution: `${lvl.height || lvl.name || 'Level'}p`,
+        height: lvl.height || 0,
+        hlsLevel: lvl.originalIndex,
+        has_audio: true
+      }))
+    ];
+    activeQualityIndex = 0;
+    populateQualitySheet(hlsQualities);
+  }
+
+  function setupPlayerStream(videoElement, streamData) {
+    const video = videoElement || document.getElementById('mainVideoPlayer') || videoEl;
+    if (!video || !streamData) return;
+
+    ensureCompanionAudio();
+
+    // Option A: If master HLS manifest exists and Hls.js is supported
+    if (streamData.hls_manifest && window.Hls && Hls.isSupported()) {
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+      }
+      hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
+      const manifestProxyUrl = streamData.hls_manifest.startsWith('http')
+        ? `/api/proxy?url=${encodeURIComponent(streamData.hls_manifest)}`
+        : streamData.hls_manifest;
+      hlsInstance.loadSource(manifestProxyUrl);
+      hlsInstance.attachMedia(video);
+
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+        console.log('[HLS] Manifest loaded with levels:', data.levels);
+        if (data && data.levels && data.levels.length) {
+          populateHlsQualitySheet(data.levels);
+        }
+      });
+
+      hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+        if (data && data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.warn('[HLS] Network error, attempting recovery...');
+              hlsInstance.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.warn('[HLS] Media error, attempting recovery...');
+              hlsInstance.recoverMediaError();
+              break;
+            default:
+              console.warn('[HLS] Fatal error, falling back to direct stream:', data);
+              if (hlsInstance) {
+                hlsInstance.destroy();
+                hlsInstance = null;
+              }
+              const fallback = (streamData.qualities && streamData.qualities[0]) || { url: streamData.default_stream, has_audio: true };
+              loadDirectStream(video, fallback);
+              break;
+          }
+        }
+      });
+      return;
+    }
+
+    // Option B: Adaptive Fallback with synchronized audio pairing
+    const defaultQual = (streamData.qualities && streamData.qualities[0]) || { url: streamData.default_stream, has_audio: true };
+    loadDirectStream(video, defaultQual);
+  }
 
   function showBufferSpinner() {
     const s = document.getElementById("playerBufferSpinner") || playerSpinner;
@@ -700,6 +839,16 @@ window.UltraVid = window.UltraVid || {};
     const unlockBtn = document.getElementById('unlockToastBtn');
     const autoPill = document.getElementById('autoplayTogglePill');
 
+    const icons = (window.UltraVid && window.UltraVid.icons) || window.icons;
+    if (icons) {
+      document.querySelectorAll('.settings-icon-slot').forEach(slot => {
+        const name = slot.getAttribute('data-icon');
+        if (icons[name]) slot.innerHTML = icons[name](20);
+      });
+      const playerGear = document.getElementById('playerGearBtn');
+      if (playerGear && icons.gear) playerGear.innerHTML = icons.gear(22, '#ffffff');
+    }
+
     function openSettingsSheet() {
       const overlay = document.getElementById('playerSettingsOverlay');
       const mainView = document.getElementById('settingsMainMenuView');
@@ -1277,6 +1426,9 @@ window.UltraVid = window.UltraVid || {};
                 qText.textContent = matched.resolution;
               }
             }
+            if (resData.hls_manifest && window.Hls && Hls.isSupported() && videoEl) {
+              setupPlayerStream(videoEl, resData);
+            }
           }
         })
         .catch(err => console.warn("Failed to resolve multi-qualities:", err));
@@ -1385,11 +1537,24 @@ window.UltraVid = window.UltraVid || {};
 
   function pause() {
     if (videoEl) videoEl.pause();
+    if (companionAudio) companionAudio.pause();
   }
 
   function teardownWatchUI() {
     currentPlaybackToken++;
     pause();
+
+    if (hlsInstance) {
+      try {
+        hlsInstance.destroy();
+      } catch (e) {}
+      hlsInstance = null;
+    }
+    if (companionAudio) {
+      companionAudio.pause();
+      companionAudio.removeAttribute('src');
+      companionAudio.load();
+    }
 
     if (currentBufferCheckCleanup) {
       currentBufferCheckCleanup();
@@ -1476,32 +1641,32 @@ window.UltraVid = window.UltraVid || {};
       if (idx !== -1) activeQualityIndex = idx;
     }
 
+    const icons = (window.UltraVid && window.UltraVid.icons) || window.icons;
     sheetList.innerHTML = qualities.map((q, idx) => {
       const isSelected = idx === activeQualityIndex || (currentHeight && q.height === currentHeight);
+      const gearSvg = (icons && icons.gear) ? icons.gear(18) : `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3"></circle></svg>`;
+      const checkSvg = isSelected ? ((icons && icons.check) ? icons.check(18) : `<svg class="quality-check-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`) : '';
       return `
         <div class="quality-option-item ${isSelected ? 'active' : ''}" data-idx="${idx}">
           <div class="quality-option-left">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09A1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
+            ${gearSvg}
             <span class="quality-label-text">${q.label || q.resolution}</span>
           </div>
-          ${isSelected ? `<svg class="quality-check-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>` : ''}
+          ${checkSvg}
         </div>
       `;
     }).join('');
 
     // Bind quality switch action
     sheetList.querySelectorAll('.quality-option-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.onclick = () => {
         const idx = parseInt(item.getAttribute('data-idx'), 10);
         switchQuality(idx);
-      });
+      };
     });
   }
 
-  function switchQuality(index) {
+  function switchQualityLevel(index) {
     const selected = currentAvailableQualities[index];
     if (!selected) return;
 
@@ -1510,34 +1675,25 @@ window.UltraVid = window.UltraVid || {};
     const qText = document.getElementById('settingsCurrentQualityText');
 
     if (qText) {
-      qText.textContent = selected.resolution;
+      qText.textContent = selected.resolution || selected.label || 'Auto';
     }
 
-    if (video && selected.url) {
-      const currentTime = video.currentTime;
-      const isPaused = video.paused;
-
-      const playUrl = selected.url.startsWith('http') ? `/api/proxy?url=${encodeURIComponent(selected.url)}` : selected.url;
-      const restoreTime = () => {
-        try {
-          if (currentTime > 0) video.currentTime = currentTime;
-        } catch (e) {}
-      };
-      video.addEventListener('loadedmetadata', restoreTime, { once: true });
-      video.src = playUrl;
-      try {
-        video.currentTime = currentTime;
-      } catch (e) {}
-
-      if (!isPaused) {
-        video.play().catch(err => console.log('Autoplay after quality switch deferred:', err));
-      }
-      showToast(`Switched quality to ${selected.resolution}`);
+    if (hlsInstance && typeof selected.hlsLevel !== 'undefined') {
+      hlsInstance.currentLevel = selected.hlsLevel;
+      showToast(`Switched quality to ${selected.resolution || selected.label}`);
+    } else if (hlsInstance && selected.height) {
+      const lvlIdx = (hlsInstance.levels || []).findIndex(l => l.height === selected.height);
+      hlsInstance.currentLevel = lvlIdx !== -1 ? lvlIdx : -1;
+      showToast(`Switched quality to ${selected.resolution || selected.label}`);
+    } else if (video) {
+      loadDirectStream(video, selected);
+      showToast(`Switched quality to ${selected.resolution || selected.label}`);
     }
 
-    // Close settings modal bottom sheet
+    populateQualitySheet(currentAvailableQualities, selected.height);
     closeQualityPicker();
   }
+  const switchQuality = switchQualityLevel;
 
   function openQualityPicker() {
     const overlay = document.getElementById('playerSettingsOverlay');
@@ -1678,6 +1834,10 @@ window.UltraVid = window.UltraVid || {};
     getIsWatchOpen: () => isWatchOpen,
     populateQualitySheet,
     switchQuality,
+    switchQualityLevel,
+    setupPlayerStream,
+    loadDirectStream,
+    populateHlsQualitySheet,
     openQualityPicker,
     closeQualityPicker,
     openDescriptionSheet,
