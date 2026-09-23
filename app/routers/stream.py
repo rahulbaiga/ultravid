@@ -74,7 +74,7 @@ def extract_all_qualities(video_id: str):
 
     # 1. First query InnerTube fast_player_sync (bypasses YouTube datacenter/bot blocks)
     try:
-        from app.innertube import fast_player_sync
+        from app.services.innertube import fast_player_sync
         turbo = fast_player_sync(clean_id)
         if turbo:
             title = turbo.get("title") or title

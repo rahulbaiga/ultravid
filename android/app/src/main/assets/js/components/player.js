@@ -1861,18 +1861,19 @@ window.UltraVid = window.UltraVid || {};
     });
   }
 
-  async function startDownload(q, audioOnly = false, targetUrl = null) {
+  const startDownload = async (q, audioOnly = false, targetUrl = null) => {
     const urlToDownload = targetUrl || currentUrl;
     if (!urlToDownload) return;
     if (dlStatus) dlStatus.textContent = "Queuing download…";
     try {
-      const res = await window.UltraVid.api.startDownload(urlToDownload, q, audioOnly);
+      const apiService = (window.UltraVid && window.UltraVid.api) || window.api;
+      const res = await apiService.startDownload(urlToDownload, q, audioOnly);
       if (!res || res.detail) throw new Error(res ? res.detail : "Download failed");
       pollStatus(res.task_id);
     } catch (e) {
       if (dlStatus) dlStatus.textContent = "Download error: " + e.message;
     }
-  }
+  };
 
   function pollStatus(taskId) {
     clearInterval(downloadPollTimer);
