@@ -1,7 +1,8 @@
 """Streaming extraction, proxy, and playback resolution router."""
 import asyncio
+import time
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.models.video import ExtractRequest, ExtractResponse
@@ -181,6 +182,17 @@ def extract_all_qualities(video_id: str):
             "audio_url": None
         })
 
+    # Check if an existing HLS / .m3u8 manifest is present
+    for f in formats:
+        f_url = f.get('url', '')
+        if ('m3u8' in f_url or 'm3u8' in str(f.get('protocol', ''))) and not hls_url:
+            hls_url = f_url
+            break
+
+    # If adaptive manifest present, pass it as primary stream source
+    # If only discrete progressive/DASH formats exist, dynamically reference master.m3u8
+    master_manifest_url = hls_url if hls_url else f"/api/stream/manifest/{clean_id}.m3u8"
+
     return {
         "id": clean_id,
         "title": title,
@@ -190,11 +202,144 @@ def extract_all_qualities(video_id: str):
         "view_count": view_count,
         "like_count": like_count,
         "upload_date": upload_date,
-        "hls_manifest": hls_url,
+        "hls_manifest": master_manifest_url,
         "audio_url": best_audio_url,
         "qualities": sorted_qualities,
         "default_stream": sorted_qualities[0]["url"] if sorted_qualities else None
     }
+
+
+_CACHE_TTL = 900  # 15 minutes
+_STREAM_CACHE = {}
+
+
+def get_cached_qualities(video_id: str):
+    clean_id = extract_video_id(video_id) or video_id.strip()
+    now = time.time()
+    if clean_id in _STREAM_CACHE:
+        ts, data = _STREAM_CACHE[clean_id]
+        if now - ts < _CACHE_TTL:
+            return data
+    data = extract_all_qualities(clean_id)
+    _STREAM_CACHE[clean_id] = (now, data)
+    return data
+
+
+@router.get("/stream/manifest/{video_id}.m3u8")
+@router.get("/manifest/{video_id}.m3u8")
+async def get_master_manifest(video_id: str, request: Request):
+    """Dynamic Master Multi-Variant HLS playlist (master.m3u8) for adaptive streaming."""
+    clean_id = extract_video_id(video_id) or video_id.strip()
+    data = await asyncio.to_thread(get_cached_qualities, clean_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Video stream not found")
+
+    native_hls = data.get("hls_manifest")
+    if native_hls and native_hls.startswith("http"):
+        from fastapi.responses import RedirectResponse
+        from urllib.parse import quote
+        return RedirectResponse(url=f"/api/proxy?url={quote(native_hls)}")
+
+    qualities = data.get("qualities", [])
+    if not qualities:
+        raise HTTPException(status_code=404, detail="No qualities available for manifest")
+
+    best_audio = data.get("audio_url")
+
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:4",
+        "#EXT-X-INDEPENDENT-SEGMENTS",
+    ]
+
+    has_separate_audio = bool(best_audio)
+    if has_separate_audio:
+        audio_uri = f"/api/stream/variant/{clean_id}/audio.m3u8"
+        lines.append(f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-group",NAME="English",DEFAULT=YES,AUTOSELECT=YES,URI="{audio_uri}"')
+
+    bw_map = {
+        2160: 15000000,
+        1440: 8000000,
+        1080: 4500000,
+        720: 2200000,
+        480: 1200000,
+        360: 700000,
+        240: 400000,
+        144: 200000
+    }
+
+    for q in qualities:
+        h = q.get("height") or 720
+        w = int(h * 16 / 9)
+        bw = bw_map.get(h, h * 3000)
+        res_label = q.get("resolution") or f"{h}p"
+        audio_param = ',AUDIO="audio-group"' if (has_separate_audio and not q.get("has_audio")) else ""
+        lines.append(f'#EXT-X-STREAM-INF:BANDWIDTH={bw},RESOLUTION={w}x{h},NAME="{res_label}"{audio_param}')
+        lines.append(f"/api/stream/variant/{clean_id}/{res_label}.m3u8")
+
+    playlist_content = "\n".join(lines) + "\n"
+    return Response(
+        content=playlist_content,
+        media_type="application/vnd.apple.mpegurl",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "public, max-age=3600"
+        }
+    )
+
+
+@router.get("/stream/variant/{video_id}/{variant_id}.m3u8")
+@router.get("/variant/{video_id}/{variant_id}.m3u8")
+async def get_variant_manifest(video_id: str, variant_id: str, request: Request):
+    """Dynamic variant media playlist for discrete video/audio streams."""
+    clean_id = extract_video_id(video_id) or video_id.strip()
+    data = await asyncio.to_thread(get_cached_qualities, clean_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Video stream not found")
+
+    duration = float(data.get("duration") or 60.0)
+    target_dur = max(int(duration) + 1, 1)
+
+    media_url = None
+    if variant_id == "audio":
+        media_url = data.get("audio_url")
+    else:
+        qualities = data.get("qualities", [])
+        for q in qualities:
+            if q.get("resolution") == variant_id or q.get("label", "").startswith(variant_id):
+                media_url = q.get("url")
+                break
+        if not media_url and qualities:
+            media_url = qualities[0].get("url")
+
+    if not media_url:
+        raise HTTPException(status_code=404, detail=f"Variant {variant_id} stream URL not found")
+
+    from urllib.parse import quote
+    proxied_url = f"/api/proxy?url={quote(media_url)}"
+
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:4",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        f"#EXT-X-TARGETDURATION:{target_dur}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        f"#EXTINF:{duration:.3f},",
+        proxied_url,
+        "#EXT-X-ENDLIST"
+    ]
+
+    playlist_content = "\n".join(lines) + "\n"
+    return Response(
+        content=playlist_content,
+        media_type="application/vnd.apple.mpegurl",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "public, max-age=3600"
+        }
+    )
 
 
 @router.get("/stream/resolve")
@@ -208,7 +353,7 @@ async def resolve_video_stream(
         raise HTTPException(status_code=400, detail="Video ID or URL parameter is required")
     vid = extract_video_id(target) or target.strip()
     try:
-        return await asyncio.to_thread(extract_all_qualities, vid)
+        return await asyncio.to_thread(get_cached_qualities, vid)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to resolve video qualities: {str(e)}")
 

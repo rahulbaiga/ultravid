@@ -132,6 +132,19 @@ window.UltraVid = window.UltraVid || {};
     populateQualitySheet(hlsQualities);
   }
 
+  const HLS_CONFIG = {
+    enableWorker: true,
+    lowLatencyMode: false,
+    backBufferLength: 30,         // Keep 30s of played video in memory for instant rewind
+    maxBufferLength: 30,          // Keep up to 30s forward buffer
+    maxMaxBufferLength: 60,
+    maxBufferSize: 60 * 1000 * 1000, // 60MB max MSE memory
+    startLevel: -1,               // Auto start or first level
+    autoLevelCapping: -1,
+    // CRITICAL: Prevent destructive flushes on manual switch
+    progressive: true
+  };
+
   function setupPlayerStream(videoElement, streamData) {
     const video = videoElement || document.getElementById('mainVideoPlayer') || videoEl;
     if (!video || !streamData) return;
@@ -144,7 +157,7 @@ window.UltraVid = window.UltraVid || {};
         hlsInstance.destroy();
         hlsInstance = null;
       }
-      hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
+      hlsInstance = new Hls(HLS_CONFIG);
       const manifestProxyUrl = streamData.hls_manifest.startsWith('http')
         ? `/api/proxy?url=${encodeURIComponent(streamData.hls_manifest)}`
         : streamData.hls_manifest;
@@ -156,6 +169,14 @@ window.UltraVid = window.UltraVid || {};
         if (data && data.levels && data.levels.length) {
           populateHlsQualitySheet(data.levels);
         }
+      });
+
+      hlsInstance.on(Hls.Events.LEVEL_SWITCHING, (event, data) => {
+        console.log(`[HLS] Seamlessly switching to next level: ${data.level} (${data.height}p)`);
+      });
+
+      hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+        console.log(`[HLS] Now playing active level: ${data.level} (${data.height}p)`);
       });
 
       hlsInstance.on(Hls.Events.ERROR, (event, data) => {
@@ -1666,11 +1687,34 @@ window.UltraVid = window.UltraVid || {};
     });
   }
 
-  function switchQualityLevel(index) {
-    const selected = currentAvailableQualities[index];
+  function updateQualityCheckmarks(targetLevelIndex) {
+    const sheetList = document.getElementById('qualityOptionsList') || document.querySelector('.quality-options-container');
+    if (!sheetList) return;
+    const icons = (window.UltraVid && window.UltraVid.icons) || window.icons;
+    const checkSvg = (icons && icons.check) ? icons.check(18) : `<svg class="quality-check-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ea6ff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+
+    sheetList.querySelectorAll('.quality-option-item').forEach(item => {
+      const idx = parseInt(item.getAttribute('data-idx'), 10);
+      const isSelected = idx === targetLevelIndex;
+      if (isSelected) {
+        item.classList.add('active');
+        const existingCheck = item.querySelector('.quality-check-icon');
+        if (!existingCheck) {
+          item.insertAdjacentHTML('beforeend', checkSvg);
+        }
+      } else {
+        item.classList.remove('active');
+        const existingCheck = item.querySelector('.quality-check-icon');
+        if (existingCheck) existingCheck.remove();
+      }
+    });
+  }
+
+  function handleDirectStreamSwitch(targetLevelIndex) {
+    const selected = currentAvailableQualities[targetLevelIndex];
     if (!selected) return;
 
-    activeQualityIndex = index;
+    activeQualityIndex = targetLevelIndex;
     const video = document.getElementById('mainVideoPlayer') || videoEl;
     const qText = document.getElementById('settingsCurrentQualityText');
 
@@ -1678,22 +1722,64 @@ window.UltraVid = window.UltraVid || {};
       qText.textContent = selected.resolution || selected.label || 'Auto';
     }
 
-    if (hlsInstance && typeof selected.hlsLevel !== 'undefined') {
-      hlsInstance.currentLevel = selected.hlsLevel;
-      showToast(`Switched quality to ${selected.resolution || selected.label}`);
-    } else if (hlsInstance && selected.height) {
-      const lvlIdx = (hlsInstance.levels || []).findIndex(l => l.height === selected.height);
-      hlsInstance.currentLevel = lvlIdx !== -1 ? lvlIdx : -1;
-      showToast(`Switched quality to ${selected.resolution || selected.label}`);
-    } else if (video) {
+    if (video) {
       loadDirectStream(video, selected);
       showToast(`Switched quality to ${selected.resolution || selected.label}`);
     }
 
-    populateQualitySheet(currentAvailableQualities, selected.height);
-    closeQualityPicker();
+    updateQualityCheckmarks(targetLevelIndex);
+    closeQualitySheet();
   }
+
+  function switchQualityLevel(targetLevelIndex) {
+    if (hlsInstance) {
+      /*
+       * DO NOT use `hls.currentLevel = targetLevelIndex;` (which can trigger buffer flushing).
+       * `hls.nextLevel = targetLevelIndex` guarantees that current buffered chunks finish
+       * playing seamlessly, while upcoming chunks are fetched at the new resolution.
+       */
+      let targetHlsLevel = targetLevelIndex;
+      let selected = null;
+
+      if (currentAvailableQualities && currentAvailableQualities[targetLevelIndex]) {
+        selected = currentAvailableQualities[targetLevelIndex];
+        if (typeof selected.hlsLevel !== 'undefined') {
+          targetHlsLevel = selected.hlsLevel;
+        }
+      } else if (hlsInstance.levels && hlsInstance.levels[targetLevelIndex]) {
+        targetHlsLevel = targetLevelIndex;
+        selected = {
+          resolution: `${hlsInstance.levels[targetLevelIndex].height}p`,
+          height: hlsInstance.levels[targetLevelIndex].height
+        };
+      }
+
+      hlsInstance.nextLevel = targetHlsLevel;
+
+      // Update UI labels immediately for instant user feedback
+      activeQualityIndex = (selected && currentAvailableQualities.indexOf(selected) !== -1)
+        ? currentAvailableQualities.indexOf(selected)
+        : targetLevelIndex;
+
+      const levelInfo = (targetHlsLevel >= 0 && hlsInstance.levels) ? hlsInstance.levels[targetHlsLevel] : null;
+      const resLabel = (selected && selected.resolution) ? selected.resolution : (levelInfo ? `${levelInfo.height}p` : 'Auto');
+
+      const qualityLabel = document.getElementById('settingsCurrentQualityText');
+      if (qualityLabel) qualityLabel.textContent = resLabel;
+
+      // Refresh checkmarks inside bottom-sheet
+      updateQualityCheckmarks(activeQualityIndex);
+      closeQualitySheet();
+      showToast(`Quality set to ${resLabel} (seamless transition)`);
+      return;
+    }
+
+    // Fallback for non-HLS streams (preserve currentTime without hard resets)
+    handleDirectStreamSwitch(targetLevelIndex);
+  }
+
   const switchQuality = switchQualityLevel;
+  const closeQualitySheet = closeQualityPicker;
 
   function openQualityPicker() {
     const overlay = document.getElementById('playerSettingsOverlay');
@@ -1838,6 +1924,9 @@ window.UltraVid = window.UltraVid || {};
     setupPlayerStream,
     loadDirectStream,
     populateHlsQualitySheet,
+    updateQualityCheckmarks,
+    handleDirectStreamSwitch,
+    closeQualitySheet,
     openQualityPicker,
     closeQualityPicker,
     openDescriptionSheet,

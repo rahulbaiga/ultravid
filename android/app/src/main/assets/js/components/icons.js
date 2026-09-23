@@ -24,7 +24,7 @@ const icons = {
     </svg>
   `,
   check: (size = 18, stroke = '#3ea6ff') => `
-    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;">
+    <svg class="quality-check-icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;">
       <polyline points="20 6 9 17 4 12"></polyline>
     </svg>
   `,
