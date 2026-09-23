@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import APP_TITLE, APP_VERSION, STATIC_DIR
-from app.routers import health, feed, search, stream, details, download, telemetry
+from app.routers import health, feed, search, stream, details, download, telemetry, proxy
 from app.services.innertube import aclose, sclose
 
 
@@ -58,6 +58,7 @@ app.include_router(stream.router, prefix="/api")
 app.include_router(details.router, prefix="/api")
 app.include_router(download.router, prefix="/api")
 app.include_router(telemetry.router, prefix="/api")
+app.include_router(proxy.router, prefix="/api")
 
 # Mount Static Web Assets
 if os.path.isdir(STATIC_DIR):

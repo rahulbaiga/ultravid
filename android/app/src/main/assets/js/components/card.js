@@ -8,9 +8,21 @@ window.UltraVid = window.UltraVid || {};
 
   function createCard(it, callbacks = {}) {
     const div = document.createElement("div");
-    div.className = "card";
+    div.className = "card video-card";
     if (it && it.id) {
+      div.setAttribute("data-id", it.id);
       div.setAttribute("data-vid", it.id);
+
+      // Pre-warm on finger touchdown (gives ~200ms latency advantage)
+      const doPrefetch = () => {
+        const api = (window.UltraVid && window.UltraVid.api) || window.api;
+        if (api && typeof api.prefetchStream === "function") {
+          api.prefetchStream(it.id);
+        }
+      };
+      div.addEventListener("touchstart", doPrefetch, { passive: true });
+      div.addEventListener("pointerdown", doPrefetch, { passive: true });
+      div.addEventListener("mouseenter", doPrefetch, { passive: true });
     }
     if (it && it.sub_topic) {
       div.setAttribute("data-subtopic", it.sub_topic);

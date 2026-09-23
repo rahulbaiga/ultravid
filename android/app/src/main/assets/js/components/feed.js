@@ -68,7 +68,49 @@ window.UltraVid = window.UltraVid || {};
     itemCallbacks.onQuickAction = callbacks.onQuickAction;
 
     setupScrollListeners();
+    bindCardPrewarming();
   }
+
+  function bindCardPrewarming(rootEl) {
+    const root = rootEl || document;
+    root.querySelectorAll('.video-card, .up-next-card, .card').forEach(card => {
+      const videoId = card.getAttribute('data-id') || card.getAttribute('data-vid');
+      if (!videoId) return;
+
+      const doPrefetch = () => {
+        const api = (window.UltraVid && window.UltraVid.api) || window.api;
+        if (api && typeof api.prefetchStream === 'function') {
+          api.prefetchStream(videoId);
+        }
+      };
+      card.addEventListener('touchstart', doPrefetch, { passive: true });
+      card.addEventListener('pointerdown', doPrefetch, { passive: true });
+      card.addEventListener('mouseenter', doPrefetch, { passive: true });
+    });
+  }
+
+  // Delegated pre-warming for instant playback on finger touch
+  document.addEventListener('touchstart', (e) => {
+    const card = e.target.closest('.video-card, .up-next-card, .card');
+    if (card) {
+      const vid = card.getAttribute('data-id') || card.getAttribute('data-vid');
+      const api = (window.UltraVid && window.UltraVid.api) || window.api;
+      if (vid && api && typeof api.prefetchStream === 'function') {
+        api.prefetchStream(vid);
+      }
+    }
+  }, { passive: true });
+
+  document.addEventListener('pointerdown', (e) => {
+    const card = e.target.closest('.video-card, .up-next-card, .card');
+    if (card) {
+      const vid = card.getAttribute('data-id') || card.getAttribute('data-vid');
+      const api = (window.UltraVid && window.UltraVid.api) || window.api;
+      if (vid && api && typeof api.prefetchStream === 'function') {
+        api.prefetchStream(vid);
+      }
+    }
+  }, { passive: true });
 
   function getActiveFeedKey() {
     if (currentTab === 'trending') return 'trending';

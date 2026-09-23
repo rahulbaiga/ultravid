@@ -7,7 +7,9 @@ from fastapi.responses import StreamingResponse
 
 from app.models.video import ExtractRequest, ExtractResponse
 from app.services import extractor
-from app.services.innertube import extract_video_id, fast_player
+from app.services.innertube import extract_video_id, fast_player, fetch_innertube_player, fetch_innertube_player_sync
+from app.core.cache import cache
+from app.routers.proxy import stream_proxy
 
 router = APIRouter(tags=["Stream"])
 
@@ -35,7 +37,7 @@ async def api_extract(payload: ExtractRequest):
                     raise ValueError("No results for query")
                 s = sr["results"][0]["url"]
 
-        # YouTube -> fast_player turbo first, yt-dlp fallback inside extractor.extract
+        # YouTube -> fast_player / fetch_innertube_player turbo first, yt-dlp fallback inside extractor.extract
         try:
             vid = extract_video_id(s)
             if vid and extractor.is_youtube_url(s):
@@ -60,6 +62,14 @@ QUALITY_ORDER = ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p", "144
 
 def extract_all_qualities(video_id: str):
     clean_id = extract_video_id(video_id) or video_id.strip()
+    # 0. First query InnerTube fetch_innertube_player_sync (<150ms instant)
+    try:
+        fast_res = fetch_innertube_player_sync(clean_id)
+        if fast_res and fast_res.get("qualities"):
+            return fast_res
+    except Exception:
+        pass
+
     url = f"https://www.youtube.com/watch?v={clean_id}"
     formats = []
     title = ""
@@ -72,9 +82,8 @@ def extract_all_qualities(video_id: str):
     hls_url = None
     best_audio_url = None
 
-    # 1. First query InnerTube fast_player_sync (bypasses YouTube datacenter/bot blocks)
+    # 1. Query InnerTube fast_player_sync (bypasses YouTube datacenter/bot blocks)
     try:
-        from app.services.innertube import fast_player_sync
         turbo = fast_player_sync(clean_id)
         if turbo:
             title = turbo.get("title") or title
@@ -96,43 +105,44 @@ def extract_all_qualities(video_id: str):
     except Exception:
         pass
 
-    # 2. Fallback / enrich with yt_dlp if needed (especially for HLS manifest and full audio tracks)
-    try:
-        ydl_opts = {
-            'format': 'bestvideo+bestaudio/best',
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'skip_download': True,
-            'nocheckcertificate': True,
-            'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        }
-        import yt_dlp
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            hls_url = hls_url or info.get('manifest_url') or info.get('hls_manifest_url')
-            title = title or info.get('title')
-            channel = channel or info.get('uploader') or info.get('channel')
-            duration = duration or info.get('duration')
-            description = description or info.get('description', '') or ''
-            view_count = view_count or info.get('view_count', 0)
-            like_count = like_count or info.get('like_count', 0)
-            upload_date = upload_date or info.get('upload_date', '') or info.get('release_date', '')
+    # 2. Fallback / enrich with yt_dlp ONLY if formats is still empty
+    if not formats:
+        try:
+            ydl_opts = {
+                'format': 'bestvideo+bestaudio/best',
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'skip_download': True,
+                'nocheckcertificate': True,
+                'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            }
+            import yt_dlp
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                hls_url = hls_url or info.get('manifest_url') or info.get('hls_manifest_url')
+                title = title or info.get('title')
+                channel = channel or info.get('uploader') or info.get('channel')
+                duration = duration or info.get('duration')
+                description = description or info.get('description', '') or ''
+                view_count = view_count or info.get('view_count', 0)
+                like_count = like_count or info.get('like_count', 0)
+                upload_date = upload_date or info.get('upload_date', '') or info.get('release_date', '')
 
-            yt_formats = info.get('formats', [])
-            if not formats:
-                formats = yt_formats
+                yt_formats = info.get('formats', [])
+                if not formats:
+                    formats = yt_formats
 
-            # Standalone audio formats
-            audio_formats = [
-                f for f in yt_formats
-                if f.get('acodec') not in (None, 'none') and f.get('vcodec') in (None, 'none') and f.get('url')
-            ]
-            if audio_formats:
-                audio_formats.sort(key=lambda x: (x.get('ext') == 'm4a', x.get('abr') or 0), reverse=True)
-                best_audio_url = audio_formats[0].get('url') or best_audio_url
-    except Exception:
-        pass
+                # Standalone audio formats
+                audio_formats = [
+                    f for f in yt_formats
+                    if f.get('acodec') not in (None, 'none') and f.get('vcodec') in (None, 'none') and f.get('url')
+                ]
+                if audio_formats:
+                    audio_formats.sort(key=lambda x: (x.get('ext') == 'm4a', x.get('abr') or 0), reverse=True)
+                    best_audio_url = audio_formats[0].get('url') or best_audio_url
+        except Exception:
+            pass
 
     qualities_map = {}
 
@@ -209,19 +219,38 @@ def extract_all_qualities(video_id: str):
     }
 
 
-_CACHE_TTL = 900  # 15 minutes
+_CACHE_TTL = 7200  # 2 hours
 _STREAM_CACHE = {}
 
 
 def get_cached_qualities(video_id: str):
     clean_id = extract_video_id(video_id) or video_id.strip()
+    cache_key = f"stream_resolve:{clean_id}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
+
+    # Check local dictionary
     now = time.time()
     if clean_id in _STREAM_CACHE:
         ts, data = _STREAM_CACHE[clean_id]
         if now - ts < _CACHE_TTL:
+            cache.set(cache_key, data, ttl=7200)
             return data
+
+    try:
+        fast_res = fetch_innertube_player_sync(clean_id)
+        if fast_res and fast_res.get("qualities"):
+            cache.set(cache_key, fast_res, ttl=7200)
+            _STREAM_CACHE[clean_id] = (now, fast_res)
+            return fast_res
+    except Exception:
+        pass
+
     data = extract_all_qualities(clean_id)
-    _STREAM_CACHE[clean_id] = (now, data)
+    if data:
+        cache.set(cache_key, data, ttl=7200)
+        _STREAM_CACHE[clean_id] = (now, data)
     return data
 
 
@@ -352,10 +381,27 @@ async def resolve_video_stream(
     if not target:
         raise HTTPException(status_code=400, detail="Video ID or URL parameter is required")
     vid = extract_video_id(target) or target.strip()
-    try:
-        return await asyncio.to_thread(get_cached_qualities, vid)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to resolve video qualities: {str(e)}")
+    cache_key = f"stream_resolve:{vid}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
+
+    # Step 1: Fast InnerTube path (<200ms)
+    t0 = time.time()
+    result = await fetch_innertube_player(vid)
+    if result and result.get("qualities"):
+        print(f"[STREAM RESOLVER] InnerTube hit in {(time.time() - t0)*1000:.1f}ms")
+        cache.set(cache_key, result, ttl=7200)  # 2 hours
+        return result
+
+    # Step 2: Fallback to yt-dlp only if InnerTube fails
+    print(f"[STREAM RESOLVER] InnerTube missed, falling back to yt-dlp for {vid}")
+    fallback_result = await asyncio.to_thread(extract_all_qualities, vid)
+    if fallback_result:
+        cache.set(cache_key, fallback_result, ttl=7200)
+        return fallback_result
+
+    raise HTTPException(status_code=404, detail="Stream formats unavailable")
 
 
 @router.get("/stream", response_model=ExtractResponse)
@@ -371,50 +417,5 @@ async def api_stream_by_id(video_id: str):
 
 @router.api_route("/proxy", methods=["GET", "HEAD"])
 async def api_proxy(request: Request, url: str = Query(...)):
-    """Streaming reverse proxy for GoogleVideo/YouTube media streams.
-    Resolves HTTP 403 Forbidden and ORB errors by proxying with Range headers.
-    """
-    if not url or not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="Invalid stream url")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://www.youtube.com/",
-        "Accept": "*/*",
-        "Connection": "keep-alive",
-    }
-    range_hdr = request.headers.get("range")
-    if range_hdr:
-        headers["Range"] = range_hdr
-
-    client = httpx.AsyncClient(follow_redirects=True, timeout=20.0)
-    try:
-        req = client.build_request("GET", url, headers=headers)
-        upstream = await client.send(req, stream=True)
-    except Exception as exc:
-        await client.aclose()
-        raise HTTPException(status_code=502, detail=f"Proxy connection failed: {exc}")
-
-    resp_headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Range",
-        "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
-        "Cache-Control": "public, max-age=3600",
-    }
-    for h in ("content-length", "content-range", "accept-ranges", "content-type"):
-        if h in upstream.headers:
-            resp_headers[h] = upstream.headers[h]
-
-    if "content-type" not in resp_headers:
-        resp_headers["content-type"] = "video/mp4"
-
-    async def stream_chunks():
-        try:
-            async for chunk in upstream.aiter_bytes(chunk_size=65536):
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-
-    status_code = upstream.status_code if upstream.status_code in (200, 206) else 200
-    return StreamingResponse(stream_chunks(), status_code=status_code, headers=resp_headers)
+    """Streaming reverse proxy delegating to centralized proxy implementation."""
+    return await stream_proxy(request, url)

@@ -108,9 +108,9 @@ window.UltraVid = window.UltraVid || {};
       audio.src = '';
     }
 
-    if (!isPaused) {
-      video.play().catch(e => console.log('Playback resume:', e));
-    }
+    hideBufferSpinner();
+    hidePlayerErrorState();
+    video.play().catch(e => console.log('Playback start:', e));
   }
 
   function populateHlsQualitySheet(levels) {
@@ -169,6 +169,9 @@ window.UltraVid = window.UltraVid || {};
         if (data && data.levels && data.levels.length) {
           populateHlsQualitySheet(data.levels);
         }
+        hideBufferSpinner();
+        hidePlayerErrorState();
+        video.play().catch(e => console.log('HLS play start:', e));
       });
 
       hlsInstance.on(Hls.Events.LEVEL_SWITCHING, (event, data) => {
@@ -1190,7 +1193,18 @@ window.UltraVid = window.UltraVid || {};
       const card = document.createElement("div");
       card.className = "up-next-card";
       const vidId = it.id || extractVideoId(it.url, it);
-      if (vidId) card.setAttribute("data-id", vidId);
+      if (vidId) {
+        card.setAttribute("data-id", vidId);
+        const doPrefetch = () => {
+          const api = (window.UltraVid && window.UltraVid.api) || window.api;
+          if (api && typeof api.prefetchStream === 'function') {
+            api.prefetchStream(vidId);
+          }
+        };
+        card.addEventListener('touchstart', doPrefetch, { passive: true });
+        card.addEventListener('pointerdown', doPrefetch, { passive: true });
+        card.addEventListener('mouseenter', doPrefetch, { passive: true });
+      }
       const durBadge = (it.duration_string || (it.duration ? fmtDur(it.duration) : ''))
         ? `<span class="dur-badge">${it.duration_string || fmtDur(it.duration)}</span>`
         : '';
@@ -1403,20 +1417,62 @@ window.UltraVid = window.UltraVid || {};
     currentData = d;
 
     const playables = (d.playable_streams && d.playable_streams.length ? d.playable_streams : (d.progressive_streams || []));
-    const rawUrl = d.default_play_url || (playables[0] && playables[0].url) || "";
+    const rawUrl = d.default_play_url || d.default_stream || (playables[0] && playables[0].url) || ((d.qualities && d.qualities[0]) ? d.qualities[0].url : "");
     const defUrl = rawUrl ? (rawUrl.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : "";
 
-    const activeH = (playables[0] && playables[0].height) || 720;
+    const activeH = (d.qualities && d.qualities[0] && d.qualities[0].height) || (playables[0] && playables[0].height) || 720;
     const qText = document.getElementById("settingsCurrentQualityText");
     if (qText) qText.textContent = `${activeH}p`;
 
-    // Dynamic multi-resolution YouTube stream resolver & description metadata sync
     const vidId = d.id || extractVideoId(url, d);
     currentVideoItem = d;
     currentVideoItem.id = vidId;
     updateNavButtonsState();
 
-    if (vidId) {
+    // Populate qualities immediately if present in payload
+    if (d.qualities && d.qualities.length) {
+      populateQualitySheet(d.qualities, activeH);
+      const matched = d.qualities.find(q => q.height === activeH) || d.qualities[0];
+      if (matched && qText) {
+        qText.textContent = matched.resolution;
+      }
+    }
+
+    // Phase: Start Playback immediately with zero delay
+    let streamInitiated = false;
+    if (d.hls_manifest && window.Hls && Hls.isSupported() && videoEl) {
+      setupPlayerStream(videoEl, d);
+      streamInitiated = true;
+    } else if (d.qualities && d.qualities.length && videoEl) {
+      setupPlayerStream(videoEl, d);
+      streamInitiated = true;
+    } else if (videoEl && defUrl) {
+      videoEl.src = defUrl;
+      const playPromise = videoEl.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+          hideBufferSpinner();
+          hidePlayerErrorState();
+        }).catch(err => {
+          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
+          console.warn("Autoplay blocked or deferred by browser policy:", err);
+          hideBufferSpinner();
+        });
+      }
+      streamInitiated = true;
+    }
+
+    if (!streamInitiated) {
+      hideBufferSpinner();
+      if (!defUrl) {
+        showPlayerErrorState(currentData || { url }, "No playable stream found for this video.");
+        return;
+      }
+    }
+
+    // Only query background stream/resolve if payload had incomplete qualities
+    if (vidId && (!d.qualities || !d.qualities.length)) {
       fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}`)
         .then(res => res.json())
         .then(resData => {
@@ -1446,35 +1502,13 @@ window.UltraVid = window.UltraVid || {};
               if (matched && qText) {
                 qText.textContent = matched.resolution;
               }
-            }
-            if (resData.hls_manifest && window.Hls && Hls.isSupported() && videoEl) {
-              setupPlayerStream(videoEl, resData);
+              if (!streamInitiated && videoEl) {
+                setupPlayerStream(videoEl, resData);
+              }
             }
           }
         })
         .catch(err => console.warn("Failed to resolve multi-qualities:", err));
-    }
-
-    if (videoEl && defUrl) {
-      videoEl.src = defUrl;
-      const playPromise = videoEl.play();
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
-          hideBufferSpinner();
-          hidePlayerErrorState();
-        }).catch(err => {
-          if (thisToken !== null && thisToken !== currentPlaybackToken) return;
-          console.warn("Autoplay blocked or deferred by browser policy:", err);
-          hideBufferSpinner();
-        });
-      }
-    } else {
-      hideBufferSpinner();
-      if (!defUrl) {
-        showPlayerErrorState(currentData || { url }, "No playable stream found for this video.");
-        return;
-      }
     }
 
     const titleEl = document.getElementById("wTitle");

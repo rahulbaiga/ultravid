@@ -168,16 +168,57 @@ window.UltraVid = window.UltraVid || {};
     return fetchApi(`/api/search?${qs.toString()}`, { signal });
   }
 
+  const prewarmedStreams = new Map();
+
+  function prefetchStream(videoId) {
+    if (!videoId) return;
+    const cleanId = (typeof videoId === "string" && (videoId.includes("=") || videoId.includes("/")))
+      ? (videoId.match(/(?:v=|youtu\.be\/|shorts\/|^)([A-Za-z0-9_-]{11})(?:[&?]|$)/) || [])[1] || videoId
+      : videoId;
+    if (!cleanId || prewarmedStreams.has(cleanId)) return;
+
+    const fetchPromise = fetch(`/api/stream/resolve?id=${encodeURIComponent(cleanId)}`)
+      .then(res => res.ok ? res.json() : null)
+      .catch(err => {
+        console.log('[PREFETCH ERR]', err);
+        prewarmedStreams.delete(cleanId);
+        return null;
+      });
+
+    prewarmedStreams.set(cleanId, fetchPromise);
+    // Auto expire after 90 seconds
+    setTimeout(() => prewarmedStreams.delete(cleanId), 90000);
+  }
+
   async function fetchSuggestions(query, signal) {
     const qs = new URLSearchParams({ q: query });
     return fetchApi(`/api/suggest?${qs.toString()}`, { signal, timeout: 5000 });
   }
 
-  async function extractStream(url, attempt = 1, signal = null) {
+  async function extractStream(urlOrId, attempt = 1, signal = null) {
     if (signal && signal.aborted) {
       const err = new Error("AbortError");
       err.name = "AbortError";
       throw err;
+    }
+
+    let cleanId = "";
+    if (typeof urlOrId === "string") {
+      const match = urlOrId.match(/(?:v=|youtu\.be\/|shorts\/|^)([A-Za-z0-9_-]{11})(?:[&?]|$)/);
+      if (match) cleanId = match[1];
+    }
+
+    // Fast-path: Return pre-warmed promise immediately if touched before click
+    if (cleanId && prewarmedStreams.has(cleanId)) {
+      try {
+        const data = await prewarmedStreams.get(cleanId);
+        if (data && !data.detail) {
+          console.log('[PREWARM HIT] Instant playback payload loaded for:', cleanId);
+          return data;
+        }
+      } catch (e) {
+        prewarmedStreams.delete(cleanId);
+      }
     }
 
     const controller = new AbortController();
@@ -188,32 +229,45 @@ window.UltraVid = window.UltraVid || {};
     }
 
     try {
-      const resp = await fetch(`/api/stream?url=${encodeURIComponent(url)}`, {
-        signal: controller.signal
-      });
+      // Direct call to fast stream resolver
+      const resolveUrl = cleanId
+        ? `/api/stream/resolve?id=${encodeURIComponent(cleanId)}`
+        : `/api/stream/resolve?url=${encodeURIComponent(urlOrId)}`;
+
+      const resp = await fetch(resolveUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
-      if (!resp.ok) {
-        // Fallback to POST /api/extract if GET /api/stream returned error
-        const fb = await fetch('/api/extract', {
+      if (resp.ok) {
+        const result = await resp.json();
+        if (cleanId) {
+          prewarmedStreams.set(cleanId, Promise.resolve(result));
+          setTimeout(() => prewarmedStreams.delete(cleanId), 90000);
+        }
+        return result;
+      }
+
+      // Fallback to /api/stream?url= or POST /api/extract
+      const fb = await fetch(`/api/stream?url=${encodeURIComponent(urlOrId)}`, { signal: controller.signal });
+      if (!fb.ok) {
+        const fbPost = await fetch('/api/extract', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
+          body: JSON.stringify({ url: urlOrId }),
           signal: controller.signal
         });
-        if (!fb.ok) {
-          const errData = await fb.json().catch(() => ({}));
+        if (!fbPost.ok) {
+          const errData = await fbPost.json().catch(() => ({}));
           throw new Error(errData.detail || `Stream HTTP ${resp.status}`);
         }
-        return await fb.json();
+        return await fbPost.json();
       }
-      return await resp.json();
+      return await fb.json();
     } catch (err) {
       clearTimeout(timeoutId);
       const isAbort = err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('abort'));
       if (isAbort && attempt < 2 && (!signal || !signal.aborted)) {
         console.warn(`[StreamExtractor] Attempt ${attempt} timed out. Initiating retry...`);
         await new Promise(res => setTimeout(res, 600));
-        return extractStream(url, attempt + 1, signal);
+        return extractStream(urlOrId, attempt + 1, signal);
       }
       throw err;
     }
@@ -242,11 +296,12 @@ window.UltraVid = window.UltraVid || {};
     refreshIcons
   };
 
-  window.UltraVid.api = {
+  const apiService = {
     fetchApi,
     fetchFeed,
     fetchSearch,
     fetchSuggestions,
+    prefetchStream,
     extractStream,
     startDownload,
     getDownloadStatus,
@@ -254,6 +309,9 @@ window.UltraVid = window.UltraVid || {};
     abortAllBackgroundRequests
   };
 
+  window.UltraVid.api = apiService;
+  window.api = apiService;
+  window.apiService = apiService;
   window.abortAllBackgroundRequests = abortAllBackgroundRequests;
   window.getFeedSignal = getFeedSignal;
 })();

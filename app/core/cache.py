@@ -6,6 +6,36 @@ FEED_CACHE: Dict[Tuple[str, int], Tuple[float, Any]] = {}
 CACHE_TTL = 900  # 15 minutes
 
 
+class Cache:
+    """Fast thread-safe in-memory cache with per-key TTL (default 7200s / 2 hours)."""
+
+    def __init__(self, default_ttl: int = 7200):
+        self._store: Dict[str, Tuple[float, Any, int]] = {}
+        self.default_ttl = default_ttl
+
+    def get(self, key: str) -> Optional[Any]:
+        entry = self._store.get(key)
+        if entry:
+            ts, val, ttl = entry
+            if time.time() - ts < ttl:
+                return val
+            self._store.pop(key, None)
+        return None
+
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        effective_ttl = ttl if ttl is not None else self.default_ttl
+        self._store[key] = (time.time(), value, effective_ttl)
+
+    def delete(self, key: str) -> None:
+        self._store.pop(key, None)
+
+    def clear(self) -> None:
+        self._store.clear()
+
+
+cache = Cache(default_ttl=7200)
+
+
 def get_cached_feed(category: str, page: int) -> Optional[Any]:
     """Retrieves cached feed payload if still within TTL."""
     now = time.time()

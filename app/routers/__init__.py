@@ -1,5 +1,5 @@
 """Routers module initialization and exports."""
-from app.routers import health, feed, search, stream, details, download, telemetry
+from app.routers import health, feed, search, stream, details, download, telemetry, proxy
 
 __all__ = [
     "health",
@@ -9,4 +9,5 @@ __all__ = [
     "details",
     "download",
     "telemetry",
+    "proxy",
 ]

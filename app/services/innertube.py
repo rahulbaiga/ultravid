@@ -1,4 +1,5 @@
 """InnerTube turbo engine - persistent HTTP/2, ANDROID compact search, TTL cache."""
+import asyncio
 import re
 import time
 from collections import OrderedDict, defaultdict
@@ -324,6 +325,139 @@ def fast_player_sync(video_id: str) -> Dict[str, Any]:
     r = c.post(PLAYER_URL, json={"context": _android_player_context(), "videoId": video_id, "contentCheckOk": True, "racyCheckOk": True}, headers=HEADERS_ANDROID_PLAYER)
     r.raise_for_status()
     return _parse_player(r.json(), video_id)
+
+
+def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    video_details = data.get("videoDetails", {}) or {}
+    streaming_data = data.get("streamingData", {}) or {}
+
+    formats = streaming_data.get("formats", []) or []
+    adaptive_formats = streaming_data.get("adaptiveFormats", []) or []
+
+    # 1. Locate best standalone audio format (m4a/mp4a)
+    audio_formats = [
+        f for f in adaptive_formats
+        if "audio" in f.get("mimeType", "") and f.get("url")
+    ]
+    audio_formats.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
+    best_audio_url = audio_formats[0].get("url") if audio_formats else None
+
+    # 2. Extract and format resolutions
+    qualities = []
+    seen_heights = set()
+
+    # Progressive (combined video+audio, typically 360p itag 18 / 720p itag 22)
+    for f in formats:
+        if f.get("url"):
+            height = f.get("height", 360) or 360
+            seen_heights.add(height)
+            qualities.append({
+                "label": f"{height}p • mp4",
+                "resolution": f"{height}p",
+                "height": height,
+                "url": f["url"],
+                "has_audio": True,
+                "audio_url": None
+            })
+
+    # Adaptive video-only formats
+    for f in adaptive_formats:
+        if "video" in f.get("mimeType", "") and f.get("url"):
+            height = f.get("height")
+            if height and height not in seen_heights:
+                seen_heights.add(height)
+                ext = "mp4" if "mp4" in f.get("mimeType", "") else "webm"
+                qualities.append({
+                    "label": f"{height}p • {ext}",
+                    "resolution": f"{height}p",
+                    "height": height,
+                    "url": f["url"],
+                    "has_audio": False,
+                    "audio_url": best_audio_url
+                })
+
+    qualities.sort(key=lambda x: x["height"], reverse=True)
+
+    hls_manifest = streaming_data.get("hlsManifestUrl")
+    if not hls_manifest:
+        hls_manifest = f"/api/stream/manifest/{video_id}.m3u8"
+
+    thumbs = video_details.get("thumbnail", {}).get("thumbnails", []) if isinstance(video_details.get("thumbnail"), dict) else []
+
+    try:
+        dur = int(video_details.get("lengthSeconds", 0) or 0)
+    except Exception:
+        dur = 0
+
+    try:
+        vc = int(video_details.get("viewCount", 0) or 0)
+    except Exception:
+        vc = 0
+
+    dur_str = None
+    if dur > 0:
+        m_, s_ = divmod(dur, 60)
+        h_, m_ = divmod(m_, 60)
+        dur_str = f"{h_}:{m_:02d}:{s_:02d}" if h_ else f"{m_}:{s_:02d}"
+
+    author = video_details.get("author", "")
+
+    return {
+        "id": video_id,
+        "title": video_details.get("title", ""),
+        "duration": dur,
+        "duration_string": dur_str,
+        "channel": author,
+        "uploader": author,
+        "channelTitle": author,
+        "view_count": vc,
+        "views": f"{vc:,} views" if vc else "100K+ views",
+        "description": video_details.get("shortDescription", ""),
+        "thumbnail": _thumb(thumbs) or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        "hls_manifest": hls_manifest,
+        "audio_url": best_audio_url,
+        "qualities": qualities,
+        "default_stream": (qualities[0]["url"] if qualities else None),
+        "source": "innertube_fast"
+    }
+
+
+async def fetch_innertube_player(video_id: str) -> Optional[Dict[str, Any]]:
+    payload = {
+        "videoId": video_id,
+        "context": _android_player_context(),
+        "contentCheckOk": True,
+        "racyCheckOk": True
+    }
+    try:
+        c = _aconfig_client()
+        resp = await c.post(PLAYER_URL, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "streamingData" in data:
+                return parse_innertube_streaming_data(video_id, data)
+    except Exception as e:
+        print(f"[INNERTUBE ERROR] {e}")
+    return None
+
+
+def fetch_innertube_player_sync(video_id: str) -> Optional[Dict[str, Any]]:
+    payload = {
+        "videoId": video_id,
+        "context": _android_player_context(),
+        "contentCheckOk": True,
+        "racyCheckOk": True
+    }
+    try:
+        c = _sconfig_client()
+        resp = c.post(PLAYER_URL, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "streamingData" in data:
+                return parse_innertube_streaming_data(video_id, data)
+    except Exception as e:
+        print(f"[INNERTUBE SYNC ERROR] {e}")
+    return None
 
 def extract_video_id(url_or_id: str) -> Optional[str]:
     s = (url_or_id or "").strip()
@@ -738,6 +872,9 @@ __all__ = [
     "fast_search_sync",
     "fast_player",
     "fast_player_sync",
+    "fetch_innertube_player",
+    "fetch_innertube_player_sync",
+    "parse_innertube_streaming_data",
     "fast_suggest",
     "extract_video_id",
     "get_category_reserve",
