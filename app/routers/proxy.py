@@ -6,6 +6,21 @@ from fastapi.responses import StreamingResponse
 router = APIRouter(tags=["Proxy"])
 
 
+_PROXY_LIMITS = httpx.Limits(max_keepalive_connections=30, max_connections=60)
+_PROXY_CLIENT: httpx.AsyncClient | None = None
+
+def _get_proxy_client() -> httpx.AsyncClient:
+    global _PROXY_CLIENT
+    if _PROXY_CLIENT is None or _PROXY_CLIENT.is_closed:
+        _PROXY_CLIENT = httpx.AsyncClient(follow_redirects=True, timeout=30.0, limits=_PROXY_LIMITS)
+    return _PROXY_CLIENT
+
+async def aclose_proxy():
+    global _PROXY_CLIENT
+    if _PROXY_CLIENT is not None and not _PROXY_CLIENT.is_closed:
+        await _PROXY_CLIENT.aclose()
+
+
 @router.api_route("/proxy", methods=["GET", "HEAD"])
 async def stream_proxy(request: Request, url: str = Query(...)):
     """Streaming reverse proxy for media streams with low-latency 64KB chunk yielding.
@@ -24,12 +39,11 @@ async def stream_proxy(request: Request, url: str = Query(...)):
     if range_header:
         headers["Range"] = range_header
 
-    client = httpx.AsyncClient(follow_redirects=True, timeout=20.0)
+    client = _get_proxy_client()
     try:
         req = client.build_request(request.method, url, headers=headers)
         resp = await client.send(req, stream=True)
     except Exception as exc:
-        await client.aclose()
         raise HTTPException(status_code=502, detail=f"Proxy connection failed: {exc}")
 
     status_code = resp.status_code if resp.status_code in (200, 206) else resp.status_code

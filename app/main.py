@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import APP_TITLE, APP_VERSION, STATIC_DIR
 from app.routers import health, feed, search, stream, details, download, telemetry, proxy
+from app.routers.proxy import aclose_proxy
 from app.services.innertube import aclose, sclose
 
 
@@ -16,6 +17,7 @@ async def lifespan(app: FastAPI):
     try:
         await aclose()
         sclose()
+        await aclose_proxy()
     except Exception:
         pass
 

@@ -1,13 +1,18 @@
 """InnerTube turbo engine - persistent HTTP/2, ANDROID compact search, TTL cache."""
 import asyncio
 import re
+import secrets
+import string
 import time
 from collections import OrderedDict, defaultdict
 from typing import Dict, Any, List, Optional
 import httpx
 
 SEARCH_URL = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
+GAPIS_PLAYER_BASE = "https://youtubei.googleapis.com/youtubei/v1/player"
 PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+
+NONCE_ALPHABET = string.ascii_letters + string.digits + "-_"
 
 ANDROID_SEARCH_VERSION = "19.05.36"
 ANDROID_PLAYER_VERSION = "20.10.38"
@@ -16,7 +21,11 @@ UA_ANDROID_PLAYER = "com.google.android.youtube/20.10.38 (Linux; U; Android 13) 
 UA_WEB = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
 HEADERS_ANDROID_SEARCH = {"User-Agent": UA_ANDROID_SEARCH, "Content-Type": "application/json"}
-HEADERS_ANDROID_PLAYER = {"User-Agent": UA_ANDROID_PLAYER, "Content-Type": "application/json"}
+HEADERS_ANDROID_PLAYER = {
+    "User-Agent": UA_ANDROID_PLAYER,
+    "Content-Type": "application/json",
+    "X-Goog-Api-Format-Version": "2",
+}
 HEADERS_WEB = {"User-Agent": UA_WEB, "Content-Type": "application/json", "Origin": "https://www.youtube.com", "Referer": "https://www.youtube.com/"}
 
 # Persistent HTTP/2 connection pooling - singletons reused across all requests
@@ -85,6 +94,17 @@ def _web_search_context(gl="IN", hl="en"):
 
 def _android_player_context(gl="IN", hl="en"):
     return {"client": {"hl": hl, "gl": gl, "clientName": "ANDROID", "clientVersion": ANDROID_PLAYER_VERSION, "androidSdkVersion": 33, "osName": "Android", "osVersion": "13", "platform": "MOBILE"}, "request": {"internalExperimentFlags": [], "useSsl": True}, "user": {"lockedSafetyMode": False}}
+
+def _generate_nonce(length: int) -> str:
+    return "".join(secrets.choice(NONCE_ALPHABET) for _ in range(length))
+
+def _format_stream_url(url: Optional[str], cpn: Optional[str] = None) -> Optional[str]:
+    if not url:
+        return url
+    if cpn and "cpn=" not in url:
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}cpn={cpn}"
+    return url
 
 def _thumb(thumbs):
     if not thumbs:
@@ -246,7 +266,7 @@ async def fast_suggest(query: str, gl: str = "IN", hl: str = "en") -> List[str]:
         pass
     return []
 
-def _parse_player(data: Dict[str, Any], video_id: str) -> Dict[str, Any]:
+def _parse_player(data: Dict[str, Any], video_id: str, cpn: Optional[str] = None) -> Dict[str, Any]:
     vd = data.get("videoDetails", {}) or {}
     sd = data.get("streamingData", {}) or {}
     fmts = (sd.get("formats", []) or []) + (sd.get("adaptiveFormats", []) or [])
@@ -256,6 +276,7 @@ def _parse_player(data: Dict[str, Any], video_id: str) -> Dict[str, Any]:
         url = f.get("url")
         if not url:
             continue
+        formatted_url = _format_stream_url(url, cpn)
         mime = f.get("mimeType", "") or ""
         ext = "webm" if "webm" in mime else "mp4"
         vcodec, acodec = None, None
@@ -278,7 +299,25 @@ def _parse_player(data: Dict[str, Any], video_id: str) -> Dict[str, Any]:
             cl = int(f.get("contentLength") or 0)
         except Exception:
             cl = 0
-        entry = {"format_id": str(f.get("itag")), "url": url, "ext": ext, "resolution": f.get("qualityLabel"), "height": h, "width": f.get("width"), "fps": f.get("fps"), "filesize": cl or None, "filesize_approx": None, "filesize_human": f"{cl/1048576:.1f} MB" if cl else "—", "tbr": f.get("bitrate"), "vcodec": vcodec, "acodec": acodec, "abr": f.get("averageBitrate") or f.get("bitrate"), "asr": None, "protocol": "https", "format_note": f.get("quality")}
+        entry = {
+            "format_id": str(f.get("itag")),
+            "url": formatted_url,
+            "ext": ext,
+            "resolution": f.get("qualityLabel"),
+            "height": h,
+            "width": f.get("width"),
+            "fps": f.get("fps"),
+            "filesize": cl or None,
+            "filesize_approx": None,
+            "filesize_human": f"{cl/1048576:.1f} MB" if cl else "—",
+            "tbr": f.get("bitrate"),
+            "vcodec": vcodec,
+            "acodec": acodec,
+            "abr": f.get("averageBitrate") or f.get("bitrate"),
+            "asr": None,
+            "protocol": "https",
+            "format_note": f.get("quality")
+        }
         hv = vcodec not in (None, "none")
         ha = acodec not in (None, "none")
         if hv and ha:
@@ -312,22 +351,72 @@ def _parse_player(data: Dict[str, Any], video_id: str) -> Dict[str, Any]:
         vc = int(vd.get("viewCount")) if vd.get("viewCount") else None
     except Exception:
         vc = None
-    return {"title": vd.get("title"), "duration": dur, "duration_string": dur_str, "thumbnail": _thumb(thumbs), "uploader": vd.get("author"), "channel": vd.get("author"), "view_count": vc, "like_count": None, "webpage_url": f"https://www.youtube.com/watch?v={video_id}", "extractor": "innertube", "resolutions": sorted(list(res_set), key=lambda r: int(r.replace("p", "")) if r.replace("p", "").isdigit() else 0), "video_streams": video_streams, "audio_streams": audio_streams, "progressive_streams": progressive, "playable_streams": playable, "default_play_url": default_url, "description": vd.get("shortDescription") or ""}
+    return {
+        "title": vd.get("title"),
+        "duration": dur,
+        "duration_string": dur_str,
+        "thumbnail": _thumb(thumbs),
+        "uploader": vd.get("author"),
+        "channel": vd.get("author"),
+        "view_count": vc,
+        "like_count": None,
+        "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+        "extractor": "innertube",
+        "resolutions": sorted(list(res_set), key=lambda r: int(r.replace("p", "")) if r.replace("p", "").isdigit() else 0),
+        "video_streams": video_streams,
+        "audio_streams": audio_streams,
+        "progressive_streams": progressive,
+        "playable_streams": playable,
+        "default_play_url": default_url,
+        "description": vd.get("shortDescription") or ""
+    }
 
 async def fast_player(video_id: str) -> Dict[str, Any]:
     c = _aconfig_client()
-    r = await c.post(PLAYER_URL, json={"context": _android_player_context(), "videoId": video_id, "contentCheckOk": True, "racyCheckOk": True}, headers=HEADERS_ANDROID_PLAYER)
+    t = _generate_nonce(12)
+    cpn = _generate_nonce(16)
+    gapis_url = f"{GAPIS_PLAYER_BASE}?prettyPrint=false&t={t}&id={video_id}"
+    payload = {
+        "videoId": video_id,
+        "cpn": cpn,
+        "context": _android_player_context(),
+        "contentCheckOk": True,
+        "racyCheckOk": True
+    }
+    try:
+        r = await c.post(gapis_url, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
+        if r.status_code == 200:
+            return _parse_player(r.json(), video_id, cpn=cpn)
+    except Exception:
+        pass
+    r = await c.post(PLAYER_URL, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
     r.raise_for_status()
-    return _parse_player(r.json(), video_id)
+    return _parse_player(r.json(), video_id, cpn=cpn)
 
 def fast_player_sync(video_id: str) -> Dict[str, Any]:
     c = _sconfig_client()
-    r = c.post(PLAYER_URL, json={"context": _android_player_context(), "videoId": video_id, "contentCheckOk": True, "racyCheckOk": True}, headers=HEADERS_ANDROID_PLAYER)
+    t = _generate_nonce(12)
+    cpn = _generate_nonce(16)
+    gapis_url = f"{GAPIS_PLAYER_BASE}?prettyPrint=false&t={t}&id={video_id}"
+    payload = {
+        "videoId": video_id,
+        "cpn": cpn,
+        "context": _android_player_context(),
+        "contentCheckOk": True,
+        "racyCheckOk": True
+    }
+    try:
+        r = c.post(gapis_url, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
+        if r.status_code == 200:
+            return _parse_player(r.json(), video_id, cpn=cpn)
+    except Exception:
+        pass
+    r = c.post(PLAYER_URL, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
     r.raise_for_status()
-    return _parse_player(r.json(), video_id)
+    return _parse_player(r.json(), video_id, cpn=cpn)
 
 
-def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any], cpn: Optional[str] = None) -> Dict[str, Any]:
     video_details = data.get("videoDetails", {}) or {}
     streaming_data = data.get("streamingData", {}) or {}
 
@@ -340,7 +429,7 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any]) -> Dict[
         if "audio" in f.get("mimeType", "") and f.get("url")
     ]
     audio_formats.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
-    best_audio_url = audio_formats[0].get("url") if audio_formats else None
+    best_audio_url = _format_stream_url(audio_formats[0].get("url"), cpn) if audio_formats else None
 
     # 2. Extract and format resolutions
     qualities = []
@@ -348,21 +437,25 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any]) -> Dict[
 
     # Progressive (combined video+audio, typically 360p itag 18 / 720p itag 22)
     for f in formats:
-        if f.get("url"):
+        raw_url = f.get("url")
+        if raw_url:
+            fmt_url = _format_stream_url(raw_url, cpn)
             height = f.get("height", 360) or 360
             seen_heights.add(height)
             qualities.append({
                 "label": f"{height}p • mp4",
                 "resolution": f"{height}p",
                 "height": height,
-                "url": f["url"],
+                "url": fmt_url,
                 "has_audio": True,
                 "audio_url": None
             })
 
     # Adaptive video-only formats
     for f in adaptive_formats:
-        if "video" in f.get("mimeType", "") and f.get("url"):
+        raw_url = f.get("url")
+        if "video" in f.get("mimeType", "") and raw_url:
+            fmt_url = _format_stream_url(raw_url, cpn)
             height = f.get("height")
             if height and height not in seen_heights:
                 seen_heights.add(height)
@@ -371,7 +464,7 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any]) -> Dict[
                     "label": f"{height}p • {ext}",
                     "resolution": f"{height}p",
                     "height": height,
-                    "url": f["url"],
+                    "url": fmt_url,
                     "has_audio": False,
                     "audio_url": best_audio_url
                 })
@@ -423,40 +516,72 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any]) -> Dict[
 
 
 async def fetch_innertube_player(video_id: str) -> Optional[Dict[str, Any]]:
+    t = _generate_nonce(12)
+    cpn = _generate_nonce(16)
+    gapis_url = f"{GAPIS_PLAYER_BASE}?prettyPrint=false&t={t}&id={video_id}"
     payload = {
         "videoId": video_id,
+        "cpn": cpn,
         "context": _android_player_context(),
         "contentCheckOk": True,
         "racyCheckOk": True
     }
+    # 1. GAPIS endpoint with t & cpn (NewPipeExtractor method - fastest ~200ms)
+    try:
+        c = _aconfig_client()
+        resp = await c.post(gapis_url, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "streamingData" in data:
+                return parse_innertube_streaming_data(video_id, data, cpn=cpn)
+    except Exception as e:
+        print(f"[INNERTUBE GAPIS ERROR] {e}")
+
+    # 2. Fallback to standard InnerTube player endpoint
     try:
         c = _aconfig_client()
         resp = await c.post(PLAYER_URL, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
         if resp.status_code == 200:
             data = resp.json()
             if "streamingData" in data:
-                return parse_innertube_streaming_data(video_id, data)
+                return parse_innertube_streaming_data(video_id, data, cpn=cpn)
     except Exception as e:
-        print(f"[INNERTUBE ERROR] {e}")
+        print(f"[INNERTUBE FALLBACK ERROR] {e}")
     return None
 
 
 def fetch_innertube_player_sync(video_id: str) -> Optional[Dict[str, Any]]:
+    t = _generate_nonce(12)
+    cpn = _generate_nonce(16)
+    gapis_url = f"{GAPIS_PLAYER_BASE}?prettyPrint=false&t={t}&id={video_id}"
     payload = {
         "videoId": video_id,
+        "cpn": cpn,
         "context": _android_player_context(),
         "contentCheckOk": True,
         "racyCheckOk": True
     }
+    # 1. GAPIS endpoint with t & cpn (NewPipeExtractor method - fastest ~200ms)
+    try:
+        c = _sconfig_client()
+        resp = c.post(gapis_url, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "streamingData" in data:
+                return parse_innertube_streaming_data(video_id, data, cpn=cpn)
+    except Exception as e:
+        print(f"[INNERTUBE GAPIS SYNC ERROR] {e}")
+
+    # 2. Fallback to standard InnerTube player endpoint
     try:
         c = _sconfig_client()
         resp = c.post(PLAYER_URL, json=payload, headers=HEADERS_ANDROID_PLAYER, timeout=4.0)
         if resp.status_code == 200:
             data = resp.json()
             if "streamingData" in data:
-                return parse_innertube_streaming_data(video_id, data)
+                return parse_innertube_streaming_data(video_id, data, cpn=cpn)
     except Exception as e:
-        print(f"[INNERTUBE SYNC ERROR] {e}")
+        print(f"[INNERTUBE FALLBACK SYNC ERROR] {e}")
     return None
 
 def extract_video_id(url_or_id: str) -> Optional[str]:
