@@ -219,29 +219,34 @@ def extract_all_qualities(video_id: str):
     }
 
 
-_CACHE_TTL = 7200  # 2 hours
+_CACHE_TTL = 900  # 15 minutes (safe Google CDN token lifecycle)
 _STREAM_CACHE = {}
 
 
-def get_cached_qualities(video_id: str):
+def get_cached_qualities(video_id: str, force_refresh: bool = False):
     clean_id = extract_video_id(video_id) or video_id.strip()
     cache_key = f"stream_resolve:{clean_id}"
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return cached_data
+    if force_refresh:
+        cache.delete(cache_key)
+        _STREAM_CACHE.pop(clean_id, None)
+    else:
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return cached_data
 
-    # Check local dictionary
+        # Check local dictionary
+        now = time.time()
+        if clean_id in _STREAM_CACHE:
+            ts, data = _STREAM_CACHE[clean_id]
+            if now - ts < _CACHE_TTL:
+                cache.set(cache_key, data, ttl=_CACHE_TTL)
+                return data
+
     now = time.time()
-    if clean_id in _STREAM_CACHE:
-        ts, data = _STREAM_CACHE[clean_id]
-        if now - ts < _CACHE_TTL:
-            cache.set(cache_key, data, ttl=7200)
-            return data
-
     try:
         fast_res = fetch_innertube_player_sync(clean_id)
         if fast_res and fast_res.get("qualities"):
-            cache.set(cache_key, fast_res, ttl=7200)
+            cache.set(cache_key, fast_res, ttl=_CACHE_TTL)
             _STREAM_CACHE[clean_id] = (now, fast_res)
             return fast_res
     except Exception:
@@ -249,7 +254,7 @@ def get_cached_qualities(video_id: str):
 
     data = extract_all_qualities(clean_id)
     if data:
-        cache.set(cache_key, data, ttl=7200)
+        cache.set(cache_key, data, ttl=_CACHE_TTL)
         _STREAM_CACHE[clean_id] = (now, data)
     return data
 
@@ -375,30 +380,37 @@ async def get_variant_manifest(video_id: str, variant_id: str, request: Request)
 @router.get("/resolve")
 async def resolve_video_stream(
     id: str = Query(None, description="YouTube Video ID"),
-    url: str = Query(None, description="YouTube Video URL")
+    url: str = Query(None, description="YouTube Video URL"),
+    force_refresh: bool = Query(False, description="Bypass cache and force fresh resolution")
 ):
     target = id or url
     if not target:
         raise HTTPException(status_code=400, detail="Video ID or URL parameter is required")
     vid = extract_video_id(target) or target.strip()
     cache_key = f"stream_resolve:{vid}"
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return cached_data
+    if force_refresh:
+        cache.delete(cache_key)
+        _STREAM_CACHE.pop(vid, None)
+    else:
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return cached_data
 
     # Step 1: Fast InnerTube path (<200ms)
     t0 = time.time()
     result = await fetch_innertube_player(vid)
     if result and result.get("qualities"):
         print(f"[STREAM RESOLVER] InnerTube hit in {(time.time() - t0)*1000:.1f}ms")
-        cache.set(cache_key, result, ttl=7200)  # 2 hours
+        cache.set(cache_key, result, ttl=_CACHE_TTL)  # 15 minutes
+        _STREAM_CACHE[vid] = (time.time(), result)
         return result
 
     # Step 2: Fallback to yt-dlp only if InnerTube fails
     print(f"[STREAM RESOLVER] InnerTube missed, falling back to yt-dlp for {vid}")
     fallback_result = await asyncio.to_thread(extract_all_qualities, vid)
     if fallback_result:
-        cache.set(cache_key, fallback_result, ttl=7200)
+        cache.set(cache_key, fallback_result, ttl=_CACHE_TTL)
+        _STREAM_CACHE[vid] = (time.time(), fallback_result)
         return fallback_result
 
     raise HTTPException(status_code=404, detail="Stream formats unavailable")

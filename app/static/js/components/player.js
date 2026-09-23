@@ -45,12 +45,17 @@ window.UltraVid = window.UltraVid || {};
   // YouTube Mobile Queue & Settings State
   let playbackHistory = [];
   let currentVideoItem = null;
+  let currentVideoId = "";
   let autoplayEnabled = true;
   let isLoopEnabled = false;
   let isScreenLocked = false;
   let currentPlaybackRate = 1.0;
   let hlsInstance = null;
   let companionAudio = null;
+
+  function showPlayerToast(msg) {
+    showToast(msg);
+  }
 
   function ensureCompanionAudio() {
     if (!companionAudio) {
@@ -148,6 +153,13 @@ window.UltraVid = window.UltraVid || {};
   function setupPlayerStream(videoElement, streamData) {
     const video = videoElement || document.getElementById('mainVideoPlayer') || videoEl;
     if (!video || !streamData) return;
+
+    // Clean slate on every watch mount / stream setup:
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    } catch (e) {}
 
     ensureCompanionAudio();
 
@@ -578,7 +590,40 @@ window.UltraVid = window.UltraVid || {};
       video.addEventListener('seeking', () => spinner.classList.add('active'));
       video.addEventListener('playing', () => spinner.classList.remove('active'));
       video.addEventListener('canplay', () => spinner.classList.remove('active'));
+      video.addEventListener('error', () => spinner.classList.remove('active'));
     }
+
+    // Robust Error Recovery on 403 / Media Element Failures
+    video.onerror = async (e) => {
+      console.error('[PLAYER ERROR] Media element failed to load stream:', video.error);
+      const vidId = currentVideoId || (currentVideoItem && currentVideoItem.id) || '';
+
+      // Purge stale caches
+      if (vidId && window.apiService && typeof window.apiService.invalidateStream === 'function') {
+        window.apiService.invalidateStream(vidId);
+      }
+
+      // Hide spinner
+      if (spinner) spinner.classList.remove('active');
+      hideBufferSpinner();
+
+      // Auto-retry once with live forced refresh from server
+      if (vidId && !video.dataset.retried) {
+        video.dataset.retried = "true";
+        console.log('[PLAYER] Retrying with force_refresh=true for:', vidId);
+        try {
+          const freshData = await fetch(`/api/stream/resolve?id=${encodeURIComponent(vidId)}&force_refresh=true`).then(r => r.json());
+          if (freshData && freshData.qualities && freshData.qualities[0]) {
+            setupPlayerStream(video, freshData);
+            return;
+          }
+        } catch (err) {
+          console.warn('[PLAYER] Auto-recovery with force_refresh failed:', err);
+        }
+      }
+      showToast('Playback error. Tap to retry.');
+      showPlayerErrorState(currentData || { url: currentUrl }, "Playback error. Tap to retry.");
+    };
 
     // Time & Progress Updates
     video.addEventListener('timeupdate', () => {
@@ -1058,6 +1103,12 @@ window.UltraVid = window.UltraVid || {};
           e.stopPropagation();
         }
         if (lastFailedItem) {
+          const targetUrl = lastFailedItem.url || lastFailedItem;
+          const fid = extractVideoId(targetUrl, lastFailedItem) || currentVideoId;
+          if (fid && window.apiService && typeof window.apiService.invalidateStream === 'function') {
+            window.apiService.invalidateStream(fid);
+          }
+          if (videoEl) delete videoEl.dataset.retried;
           hidePlayerErrorState();
           loadAndPlay(lastFailedItem);
         }
@@ -1369,6 +1420,11 @@ window.UltraVid = window.UltraVid || {};
     currentAvailableQualities = [];
     activeQualityIndex = 0;
 
+    const v = videoEl || document.getElementById('mainVideoPlayer');
+    if (v) {
+      delete v.dataset.retried;
+    }
+
     // Phase 1: Immediately cancel all pending background requests to guarantee 100% video bandwidth
     if (window.UltraVid && window.UltraVid.api && typeof window.UltraVid.api.abortAllBackgroundRequests === 'function') {
       window.UltraVid.api.abortAllBackgroundRequests();
@@ -1378,6 +1434,7 @@ window.UltraVid = window.UltraVid || {};
     document.body.classList.add('watch-route-active');
 
     const vidId = extractVideoId(url, preview);
+    currentVideoId = vidId || "";
     try {
       if (!history.state || history.state.view !== "watch" || history.state.id !== vidId) {
         history.pushState({ view: "watch", id: vidId }, "", "#watch/" + vidId);
@@ -1425,6 +1482,7 @@ window.UltraVid = window.UltraVid || {};
     if (qText) qText.textContent = `${activeH}p`;
 
     const vidId = d.id || extractVideoId(url, d);
+    currentVideoId = vidId || "";
     currentVideoItem = d;
     currentVideoItem.id = vidId;
     updateNavButtonsState();

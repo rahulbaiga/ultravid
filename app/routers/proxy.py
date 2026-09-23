@@ -3,6 +3,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from app.core.cache import cache
+
 router = APIRouter(tags=["Proxy"])
 
 
@@ -30,8 +32,9 @@ async def stream_proxy(request: Request, url: str = Query(...)):
         raise HTTPException(status_code=400, detail="Invalid stream url")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip",
         "Referer": "https://www.youtube.com/",
+        "Origin": "https://www.youtube.com",
         "Accept": "*/*",
         "Connection": "keep-alive",
     }
@@ -45,6 +48,20 @@ async def stream_proxy(request: Request, url: str = Query(...)):
         resp = await client.send(req, stream=True)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Proxy connection failed: {exc}")
+
+    if resp.status_code in (403, 410):
+        print(f"[PROXY CACHE-BUST] Upstream returned {resp.status_code} for expired CDN URL. Invalidating cache.")
+        await resp.aclose()
+        cache.invalidate_pattern("stream_resolve:")
+        return Response(
+            status_code=resp.status_code,
+            content="Upstream CDN token expired; cache cleared",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Cache-Control": "no-cache, no-store, must-revalidate"
+            }
+        )
 
     status_code = resp.status_code if resp.status_code in (200, 206) else resp.status_code
     response_headers = {

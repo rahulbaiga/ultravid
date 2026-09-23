@@ -170,6 +170,15 @@ window.UltraVid = window.UltraVid || {};
 
   const prewarmedStreams = new Map();
 
+  function invalidateStream(videoId) {
+    if (!videoId) return;
+    const cleanId = (typeof videoId === "string" && (videoId.includes("=") || videoId.includes("/")))
+      ? (videoId.match(/(?:v=|youtu\.be\/|shorts\/|^)([A-Za-z0-9_-]{11})(?:[&?]|$)/) || [])[1] || videoId
+      : videoId;
+    prewarmedStreams.delete(cleanId);
+    prewarmedStreams.delete(videoId);
+  }
+
   function prefetchStream(videoId) {
     if (!videoId) return;
     const cleanId = (typeof videoId === "string" && (videoId.includes("=") || videoId.includes("/")))
@@ -177,10 +186,32 @@ window.UltraVid = window.UltraVid || {};
       : videoId;
     if (!cleanId || prewarmedStreams.has(cleanId)) return;
 
-    const fetchPromise = fetch(`/api/stream/resolve?id=${encodeURIComponent(cleanId)}`)
-      .then(res => res.ok ? res.json() : null)
+    // Strict LRU cap: max 5 entries
+    if (prewarmedStreams.size >= 5) {
+      const oldestKey = prewarmedStreams.keys().next().value;
+      prewarmedStreams.delete(oldestKey);
+    }
+
+    // 4-second timeout controller for prefetch - immediately purge on timeout/error
+    const prefetchController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      prefetchController.abort();
+      prewarmedStreams.delete(cleanId);
+    }, 4000);
+
+    const fetchPromise = fetch(`/api/stream/resolve?id=${encodeURIComponent(cleanId)}`, {
+      signal: prefetchController.signal
+    })
+      .then(res => {
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          prewarmedStreams.delete(cleanId);
+          return null;
+        }
+        return res.json();
+      })
       .catch(err => {
-        console.log('[PREFETCH ERR]', err);
+        clearTimeout(timeoutId);
         prewarmedStreams.delete(cleanId);
         return null;
       });
@@ -302,6 +333,7 @@ window.UltraVid = window.UltraVid || {};
     fetchSearch,
     fetchSuggestions,
     prefetchStream,
+    invalidateStream,
     extractStream,
     startDownload,
     getDownloadStatus,
