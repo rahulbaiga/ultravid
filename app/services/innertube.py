@@ -423,13 +423,19 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any], cpn: Opt
     formats = streaming_data.get("formats", []) or []
     adaptive_formats = streaming_data.get("adaptiveFormats", []) or []
 
-    # 1. Locate best standalone audio format (m4a/mp4a)
-    audio_formats = [
+    # 1. Locate best standalone audio format (prioritize m4a/mp4a for 100% universal browser compatibility)
+    m4a_audio = [
+        f for f in adaptive_formats
+        if ("audio/mp4" in f.get("mimeType", "") or "mp4a" in f.get("mimeType", "")) and f.get("url")
+    ]
+    m4a_audio.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
+    all_audio = [
         f for f in adaptive_formats
         if "audio" in f.get("mimeType", "") and f.get("url")
     ]
-    audio_formats.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
-    best_audio_url = _format_stream_url(audio_formats[0].get("url"), cpn) if audio_formats else None
+    all_audio.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
+    selected_audio = m4a_audio or all_audio
+    best_audio_url = _format_stream_url(selected_audio[0].get("url"), cpn) if selected_audio else None
 
     # 2. Extract and format resolutions
     qualities = []
@@ -471,9 +477,7 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any], cpn: Opt
 
     qualities.sort(key=lambda x: x["height"], reverse=True)
 
-    hls_manifest = streaming_data.get("hlsManifestUrl")
-    if not hls_manifest:
-        hls_manifest = f"/api/stream/manifest/{video_id}.m3u8"
+    hls_manifest = streaming_data.get("hlsManifestUrl") or None
 
     thumbs = video_details.get("thumbnail", {}).get("thumbnails", []) if isinstance(video_details.get("thumbnail"), dict) else []
 
@@ -495,6 +499,10 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any], cpn: Opt
 
     author = video_details.get("author", "")
 
+    # Prioritize progressive format that has BOTH video and audio for instant, rock-solid default playback
+    progressive_playable = [q for q in qualities if q.get("has_audio")]
+    best_default_stream = (progressive_playable[0]["url"] if progressive_playable else (qualities[0]["url"] if qualities else None))
+
     return {
         "id": video_id,
         "title": video_details.get("title", ""),
@@ -510,7 +518,7 @@ def parse_innertube_streaming_data(video_id: str, data: Dict[str, Any], cpn: Opt
         "hls_manifest": hls_manifest,
         "audio_url": best_audio_url,
         "qualities": qualities,
-        "default_stream": (qualities[0]["url"] if qualities else None),
+        "default_stream": best_default_stream,
         "source": "innertube_fast"
     }
 

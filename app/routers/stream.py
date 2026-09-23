@@ -200,8 +200,12 @@ def extract_all_qualities(video_id: str):
             break
 
     # If adaptive manifest present, pass it as primary stream source
-    # If only discrete progressive/DASH formats exist, dynamically reference master.m3u8
-    master_manifest_url = hls_url if hls_url else f"/api/stream/manifest/{clean_id}.m3u8"
+    # For standard VOD, do not forge fake HLS manifests (native progressive MP4 plays directly without demux overhead)
+    master_manifest_url = hls_url if hls_url else None
+
+    # Prioritize progressive format that has BOTH video and audio for instant, rock-solid default playback
+    progressive_playable = [q for q in sorted_qualities if q.get("has_audio")]
+    best_default_stream = progressive_playable[0]["url"] if progressive_playable else (sorted_qualities[0]["url"] if sorted_qualities else None)
 
     return {
         "id": clean_id,
@@ -215,7 +219,7 @@ def extract_all_qualities(video_id: str):
         "hls_manifest": master_manifest_url,
         "audio_url": best_audio_url,
         "qualities": sorted_qualities,
-        "default_stream": sorted_qualities[0]["url"] if sorted_qualities else None
+        "default_stream": best_default_stream
     }
 
 

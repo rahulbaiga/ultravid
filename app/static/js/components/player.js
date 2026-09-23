@@ -92,10 +92,16 @@ window.UltraVid = window.UltraVid || {};
     const rawUrl = qualityObj.url || '';
     const playUrl = rawUrl ? (rawUrl.startsWith('http') ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : '';
     if (playUrl) {
+      if (curTime > 0) {
+        const onLoaded = () => {
+          try {
+            video.currentTime = curTime;
+          } catch (e) {}
+          video.removeEventListener('loadedmetadata', onLoaded);
+        };
+        video.addEventListener('loadedmetadata', onLoaded);
+      }
       video.src = playUrl;
-      try {
-        video.currentTime = curTime;
-      } catch (e) {}
     }
 
     // If format is adaptive video-only, sync with companion audio stream
@@ -115,7 +121,16 @@ window.UltraVid = window.UltraVid || {};
 
     hideBufferSpinner();
     hidePlayerErrorState();
-    video.play().catch(e => console.log('Playback start:', e));
+    const playPromise = video.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(e => {
+        console.warn('Playback start defer:', e);
+        if (e && e.name === 'NotAllowedError') {
+          video.muted = true;
+          video.play().catch(err => console.log('Muted playback retry failed:', err));
+        }
+      });
+    }
   }
 
   function populateHlsQualitySheet(levels) {
@@ -163,8 +178,13 @@ window.UltraVid = window.UltraVid || {};
 
     ensureCompanionAudio();
 
-    // Option A: If master HLS manifest exists and Hls.js is supported
-    if (streamData.hls_manifest && window.Hls && Hls.isSupported()) {
+    // Option A: If master HLS manifest exists and Hls.js is supported (Strictly for real YouTube livestreams)
+    const isRealHls = Boolean(
+      streamData.hls_manifest &&
+      (streamData.isLive || (streamData.hls_manifest.includes('m3u8') && streamData.hls_manifest.startsWith('http')))
+    );
+
+    if (isRealHls && window.Hls && Hls.isSupported()) {
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
@@ -183,7 +203,12 @@ window.UltraVid = window.UltraVid || {};
         }
         hideBufferSpinner();
         hidePlayerErrorState();
-        video.play().catch(e => console.log('HLS play start:', e));
+        video.play().catch(e => {
+          if (e && e.name === 'NotAllowedError') {
+            video.muted = true;
+            video.play().catch(() => {});
+          }
+        });
       });
 
       hlsInstance.on(Hls.Events.LEVEL_SWITCHING, (event, data) => {
@@ -211,7 +236,8 @@ window.UltraVid = window.UltraVid || {};
                 hlsInstance.destroy();
                 hlsInstance = null;
               }
-              const fallback = (streamData.qualities && streamData.qualities[0]) || { url: streamData.default_stream, has_audio: true };
+              const qualities = streamData.qualities || [];
+              const fallback = qualities.find(q => q.has_audio) || qualities[0] || { url: streamData.default_stream, has_audio: true };
               loadDirectStream(video, fallback);
               break;
           }
@@ -220,8 +246,12 @@ window.UltraVid = window.UltraVid || {};
       return;
     }
 
-    // Option B: Adaptive Fallback with synchronized audio pairing
-    const defaultQual = (streamData.qualities && streamData.qualities[0]) || { url: streamData.default_stream, has_audio: true };
+    // Option B: Standard VOD Playback - prioritize progressive format (video + audio multiplexed)
+    const qualities = streamData.qualities || [];
+    const defaultQual = (streamData.default_stream && qualities.find(q => q.url === streamData.default_stream))
+      || qualities.find(q => q.has_audio)
+      || qualities[0]
+      || { url: streamData.default_stream, has_audio: true };
     loadDirectStream(video, defaultQual);
   }
 
@@ -590,6 +620,7 @@ window.UltraVid = window.UltraVid || {};
       video.addEventListener('seeking', () => spinner.classList.add('active'));
       video.addEventListener('playing', () => spinner.classList.remove('active'));
       video.addEventListener('canplay', () => spinner.classList.remove('active'));
+      video.addEventListener('loadeddata', () => spinner.classList.remove('active'));
       video.addEventListener('error', () => spinner.classList.remove('active'));
     }
 
@@ -1477,7 +1508,11 @@ window.UltraVid = window.UltraVid || {};
     const rawUrl = d.default_play_url || d.default_stream || (playables[0] && playables[0].url) || ((d.qualities && d.qualities[0]) ? d.qualities[0].url : "");
     const defUrl = rawUrl ? (rawUrl.startsWith("http") ? `/api/proxy?url=${encodeURIComponent(rawUrl)}` : rawUrl) : "";
 
-    const activeH = (d.qualities && d.qualities[0] && d.qualities[0].height) || (playables[0] && playables[0].height) || 720;
+    const defaultQual = (d.qualities && d.qualities.find(q => q.url === d.default_stream))
+      || (d.qualities && d.qualities.find(q => q.has_audio))
+      || (d.qualities && d.qualities[0])
+      || (playables[0]);
+    const activeH = (defaultQual && defaultQual.height) || 720;
     const qText = document.getElementById("settingsCurrentQualityText");
     if (qText) qText.textContent = `${activeH}p`;
 
@@ -1498,7 +1533,12 @@ window.UltraVid = window.UltraVid || {};
 
     // Phase: Start Playback immediately with zero delay
     let streamInitiated = false;
-    if (d.hls_manifest && window.Hls && Hls.isSupported() && videoEl) {
+    const isRealHls = Boolean(
+      d.hls_manifest &&
+      (d.isLive || (d.hls_manifest.includes('m3u8') && d.hls_manifest.startsWith('http')))
+    );
+
+    if (isRealHls && window.Hls && Hls.isSupported() && videoEl) {
       setupPlayerStream(videoEl, d);
       streamInitiated = true;
     } else if (d.qualities && d.qualities.length && videoEl) {
@@ -1515,6 +1555,10 @@ window.UltraVid = window.UltraVid || {};
         }).catch(err => {
           if (thisToken !== null && thisToken !== currentPlaybackToken) return;
           console.warn("Autoplay blocked or deferred by browser policy:", err);
+          if (err && err.name === 'NotAllowedError') {
+            videoEl.muted = true;
+            videoEl.play().catch(() => {});
+          }
           hideBufferSpinner();
         });
       }
