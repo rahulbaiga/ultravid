@@ -9,3 +9,13 @@ __pycache__/
 .cache/
 .env
 downloads/
+
+# Android Gradle & Build Artifacts
+android/.gradle/
+android/app/build/
+android/local.properties
+.gradle/
+build/
+*.apk
+*.aab
+
