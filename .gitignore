@@ -19,3 +19,8 @@ build/
 *.apk
 *.aab
 
+# Local Preview Server
+serve_architecture.py
+reports/index.html
+
+
