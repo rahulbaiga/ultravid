@@ -46,3 +46,10 @@ Comprehensive deep-dive analysis into the official NewPipe and NewPipeExtractor 
 - [**`ANDROID_DEV_SETUP.md`**](./ANDROID_DEV_SETUP.md) — Setup and configuration guide for Android SDK, OpenJDK, and Gradle in PRoot.
 - [**`BUILD_COMMANDS.md`**](./BUILD_COMMANDS.md) — Command-line build reference for debug APKs, release APKs, and test suites.
 - [**`NATIVE_MIGRATION_PLAN.md`**](./NATIVE_MIGRATION_PLAN.md) — Step-by-step phased roadmap for UltraVid's migration to native Kotlin/Compose/Media3.
+
+---
+
+## 4. Interactive System Architecture (Archify)
+
+- [**`ultravid-architecture.html`**](./ultravid-architecture.html) — **Interactive HTML Diagram** generated with Archify. Features verified repository code links, dark/light themes, component isolation views (Turbo Streaming, Async Download Pipeline, Multi-Platform Fallback), and vector export.
+- [**`ultravid-architecture.json`**](./ultravid-architecture.json) — Formatted Archify JSON-IR specification validated against the UltraVid repository at commit `52d0fd5`.

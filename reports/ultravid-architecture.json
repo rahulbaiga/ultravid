@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "UltraVid System Architecture",
+    "output": "ultravid-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/rahulbaiga/ultravid.git",
+      "revision": "52d0fd59d88dac0c9d92af018fdf83635dcf8618",
+      "provider": "github"
+    },
+    "views": [
+      {
+        "id": "turbo-stream-flow",
+        "label": "Turbo streaming flow",
+        "focus": ["client-android", "web-ui", "api-gateway", "innertube-engine", "stream-cache", "youtube-api"],
+        "note": "Follow the sub-second playback path from UI to InnerTube and memory cache."
+      },
+      {
+        "id": "download-pipeline",
+        "label": "Async download pipeline",
+        "focus": ["web-ui", "api-gateway", "download-queue", "google-cdn"],
+        "note": "Background download tasks streamed and muxed into MP4/MP3 by ffmpeg."
+      },
+      {
+        "id": "multi-platform-fallback",
+        "label": "Universal fallback path",
+        "focus": ["api-gateway", "ytdlp-extractor", "social-platforms"],
+        "note": "yt-dlp routing for Instagram, TikTok, Facebook, and X extractions."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "client-android",
+      "type": "frontend",
+      "label": "Android App",
+      "sublabel": "Kotlin + WebView",
+      "tag": "Native Shell",
+      "pos": [40, 180],
+      "size": [130, 60],
+      "sources": [
+        {
+          "path": "android/app/src/main/java/com/ultravid/app/MainActivity.kt",
+          "line": 20,
+          "label": "AndroidBridge & WebView"
+        }
+      ]
+    },
+    {
+      "id": "web-ui",
+      "type": "frontend",
+      "label": "Web App SPA",
+      "sublabel": "Vanilla JS UI",
+      "tag": "Touch-First",
+      "pos": [40, 320],
+      "size": [130, 60],
+      "sources": [
+        {
+          "path": "app/static/app.js",
+          "line": 1,
+          "label": "SPA Controller"
+        }
+      ]
+    },
+    {
+      "id": "api-gateway",
+      "type": "backend",
+      "label": "FastAPI Server",
+      "sublabel": "Async REST :8000",
+      "tag": "Uvicorn Engine",
+      "brand": "fastapi",
+      "pos": [250, 250],
+      "size": [140, 60],
+      "sources": [
+        {
+          "path": "app/main.py",
+          "line": 40,
+          "label": "Router & Endpoints"
+        }
+      ]
+    },
+    {
+      "id": "stream-cache",
+      "type": "database",
+      "label": "Stream Cache",
+      "sublabel": "In-Memory TTL 900s",
+      "tag": "Active Guard",
+      "pos": [470, 70],
+      "size": [140, 60],
+      "sources": [
+        {
+          "path": "app/core/cache.py",
+          "line": 10,
+          "label": "TTL Cache Dictionary"
+        }
+      ]
+    },
+    {
+      "id": "innertube-engine",
+      "type": "backend",
+      "label": "Turbo InnerTube",
+      "sublabel": "Direct Player API",
+      "tag": "HTTP/2 Pool",
+      "brand": "python",
+      "pos": [470, 180],
+      "size": [140, 60],
+      "sources": [
+        {
+          "path": "app/services/innertube.py",
+          "line": 70,
+          "label": "InnerTube Client"
+        }
+      ]
+    },
+    {
+      "id": "ytdlp-extractor",
+      "type": "backend",
+      "label": "Universal Extractor",
+      "sublabel": "yt-dlp Engine",
+      "tag": "Social Fallback",
+      "brand": "python",
+      "pos": [470, 290],
+      "size": [140, 60],
+      "sources": [
+        {
+          "path": "app/services/extractor.py",
+          "line": 25,
+          "label": "Multi-Platform Extractor"
+        }
+      ]
+    },
+    {
+      "id": "download-queue",
+      "type": "backend",
+      "label": "Download Manager",
+      "sublabel": "Async Queue & Muxer",
+      "tag": "ffmpeg -c copy",
+      "pos": [470, 400],
+      "size": [140, 60],
+      "sources": [
+        {
+          "path": "app/download_manager.py",
+          "line": 30,
+          "label": "Download Task Queue"
+        }
+      ]
+    },
+    {
+      "id": "youtube-api",
+      "type": "external",
+      "label": "YouTube InnerTube",
+      "sublabel": "/youtubei/v1/player",
+      "tag": "Metadata & Streams",
+      "brand": "youtube",
+      "pos": [700, 180],
+      "size": [150, 60]
+    },
+    {
+      "id": "google-cdn",
+      "type": "cloud",
+      "label": "Google Video CDN",
+      "sublabel": "googlevideo.com",
+      "tag": "Media Chunks",
+      "brand": "google-cloud",
+      "pos": [700, 400],
+      "size": [150, 60]
+    },
+    {
+      "id": "social-platforms",
+      "type": "external",
+      "label": "Social Platforms",
+      "sublabel": "IG / FB / X / TikTok",
+      "tag": "Video Sources",
+      "pos": [700, 290],
+      "size": [150, 60]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Local Application Host (PRoot Debian / Termux)",
+      "wraps": [
+        "client-android",
+        "web-ui",
+        "api-gateway",
+        "stream-cache",
+        "innertube-engine",
+        "ytdlp-extractor",
+        "download-queue"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "UltraVid Python Engine",
+      "wraps": [
+        "api-gateway",
+        "stream-cache",
+        "innertube-engine",
+        "ytdlp-extractor",
+        "download-queue"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "bridge-rpc",
+      "from": "client-android",
+      "to": "api-gateway",
+      "label": "Native Bridge",
+      "variant": "emphasis"
+    },
+    {
+      "id": "web-api-req",
+      "from": "web-ui",
+      "to": "api-gateway",
+      "label": "REST API"
+    },
+    {
+      "id": "api-to-cache",
+      "from": "innertube-engine",
+      "to": "stream-cache",
+      "label": "read / write",
+      "variant": "dashed"
+    },
+    {
+      "id": "api-to-turbo",
+      "from": "api-gateway",
+      "to": "innertube-engine",
+      "label": "Turbo resolve",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "api-to-fallback",
+      "from": "api-gateway",
+      "to": "ytdlp-extractor",
+      "label": "Fallback"
+    },
+    {
+      "id": "api-to-download",
+      "from": "api-gateway",
+      "to": "download-queue",
+      "label": "Enqueue job",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "turbo-to-yt",
+      "from": "innertube-engine",
+      "to": "youtube-api",
+      "label": "HTTP/2 POST",
+      "variant": "emphasis"
+    },
+    {
+      "id": "extractor-to-social",
+      "from": "ytdlp-extractor",
+      "to": "social-platforms",
+      "label": "Web scrape"
+    },
+    {
+      "id": "worker-to-cdn",
+      "from": "download-queue",
+      "to": "google-cdn",
+      "label": "Range stream",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Dual-Frontend Architecture",
+      "items": [
+        "Native Android WebView shell with DownloadManager bridge",
+        "Zero-dependency vanilla JS mobile-first SPA with feed prefetching"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Turbo InnerTube Engine",
+      "items": [
+        "Persistent HTTP/2 socket pooling directly to YouTube endpoints",
+        "In-memory 900-second TTL cache prevents expired CDN 403 errors"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Universal Fallback & Muxing",
+      "items": [
+        "yt-dlp multi-platform extraction for TikTok, Instagram, and X",
+        "Asynchronous ffmpeg stream merger without re-encoding overhead"
+      ]
+    }
+  ]
+}
